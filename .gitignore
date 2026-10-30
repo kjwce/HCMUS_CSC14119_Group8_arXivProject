@@ -1,0 +1,19 @@
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.coverage
+.venv/
+venv/
+
+# Milestone data must never be committed.
+raw/
+data/
+logs/
+outputs/
+processed/
+*.tar
+*.tar.gz
+*.zip
+s2_api_key.txt
+*.key
+

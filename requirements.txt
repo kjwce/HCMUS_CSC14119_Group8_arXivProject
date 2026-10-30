@@ -1,0 +1,12 @@
+# Milestone 1 crawler.
+requests>=2.31,<3
+tqdm>=4.66,<5
+
+# M1 resource logging and M2 benchmark monitoring.
+psutil>=5.9,<8
+
+# Test runner used by the final shared repository.
+pytest>=8,<10
+
+# TV2 will add its bibliography/parser dependencies here (for example bibtexparser).
+
