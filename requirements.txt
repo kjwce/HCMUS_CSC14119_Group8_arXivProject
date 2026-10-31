@@ -8,5 +8,6 @@ psutil>=5.9,<8
 # Test runner used by the final shared repository.
 pytest>=8,<10
 
-# TV2 will add its bibliography/parser dependencies here (for example bibtexparser).
+# M2 .bib parsing (src/m2/bib.py). The 1.x API is used; 2.x is a different API.
+bibtexparser>=1.4,<2
 
