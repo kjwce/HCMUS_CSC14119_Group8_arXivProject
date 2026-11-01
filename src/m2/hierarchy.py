@@ -44,11 +44,30 @@ FIGURE_ENVIRONMENTS = {
     "figure*",
     "table",
     "table*",
+    # Common standalone table environments.  They must also be recognized when
+    # authors omit the outer ``table`` float (notably AASTeX ``deluxetable``).
+    "tabular",
+    "tabular*",
+    "tabularx",
+    "tabulary",
+    "tblr",
+    "longtblr",
+    "talltblr",
+    "deluxetable",
+    "deluxetable*",
+    "supertabular",
+    "xtabular",
+    "threeparttable",
+    "ruledtabular",
     "wrapfigure",
     "wraptable",
     "longtable",
     "sidewaysfigure",
+    "sidewaysfigure*",
     "sidewaystable",
+    "sidewaystable*",
+    "subfigure",
+    "subtable",
 }
 SPECIAL_ENVIRONMENTS = (
     LIST_ENVIRONMENTS

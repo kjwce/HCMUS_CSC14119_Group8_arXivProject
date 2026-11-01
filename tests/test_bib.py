@@ -37,6 +37,11 @@ class FieldTests(unittest.TestCase):
 
     def test_identifiers(self) -> None:
         self.assertEqual(normalize_doi("https://doi.org/10.1103/PhysRevA.1.2."), "10.1103/physreva.1.2")
+        self.assertEqual(normalize_doi("(doi:10.1000/example)."), "10.1000/example")
+        self.assertEqual(
+            normalize_doi("doi:10.1002/(SICI)1099-0844(199912)17:4"),
+            "10.1002/(sici)1099-0844(199912)17:4",
+        )
         self.assertEqual(normalize_arxiv("arXiv preprint arXiv:1706.03762v5"), "1706.03762")
         self.assertEqual(normalize_arxiv("hep-th/9901001"), "hep-th/9901001")
 

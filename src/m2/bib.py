@@ -140,7 +140,13 @@ def normalize_doi(value: str | None) -> str | None:
     match = _DOI_RE.search(value.replace("\\_", "_"))
     if not match:
         return None
-    return match.group(0).rstrip(".").lower()
+    doi = match.group(0).rstrip(".,;:")
+    # A DOI may legitimately contain balanced brackets/parentheses.  Strip only
+    # unmatched closing punctuation introduced by prose such as ``(doi:...).``.
+    pairs = {")": "(", "]": "[", "}": "{"}
+    while doi and doi[-1] in pairs and doi.count(doi[-1]) > doi.count(pairs[doi[-1]]):
+        doi = doi[:-1].rstrip(".,;:")
+    return doi.lower()
 
 
 def normalize_arxiv(value: str | None) -> str | None:

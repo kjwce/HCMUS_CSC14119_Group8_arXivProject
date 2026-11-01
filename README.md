@@ -7,28 +7,14 @@ processed corpora stay outside GitHub.
 
 - `src/m1/scraper_m1.py`: resumable arXiv and Semantic Scholar crawler.
 - `src/m2/models.py`: shared `Node` contract.
+- `src/m2/gather.py`: root detection and transitive multi-file gathering.
 - `src/m2/hierarchy.py`: Document/heading/list/sentence/formula/figure tree builder.
+- `src/m2/normalize.py`: sentence splitting, cleanup and math/citation normalization.
+- `src/m2/bib.py`: `.bib`/`\\bibitem` extraction and cross-version deduplication.
 - `src/m2/store.py`: cross-version content deduplication and the `elements`,
   `hierarchy`, and `bibtex` working tables.
 - `src/m2/run_m2.py`: resumable multiprocessing runner and corpus inventory command.
-- `tests/`: unit tests for the TV1 modules.
-
-The final M2 integration also requires the teammate-owned files
-`src/m2/gather.py`, `src/m2/normalize.py`, and `src/m2/bib.py`. Their expected
-public functions are:
-
-```python
-gather.flatten(version_dir) -> GatherResult(root, used_files, unused_files, text)
-normalize.clean(text) -> str
-normalize.normalize_math(text) -> str
-normalize.split_sentences(text) -> list[str]
-normalize.rename_cites(text, rename_map) -> str
-bib.extract(version_dir, text) -> list[Entry]
-bib.dedup(entries_by_version) -> (unified_entries, rename_maps)
-```
-
-Prefer a rename map per version (`{version: {old_key: unified_key}}`). The runner
-also accepts the original global mapping for backward compatibility.
+- `tests/`: unit and integration-contract tests for the M2 modules.
 
 ## Environment
 
@@ -54,8 +40,6 @@ Do not commit `s2_api_key.txt` or the output directory.
 
 ## Validate the M1 corpus for Milestone 2
 
-This command does not need the TV2 modules:
-
 ```powershell
 python -m src.m2.run_m2 `
   --input "D:\HocTapHCMUS\NM_KHDL\crawlweb\raw" `
@@ -64,17 +48,13 @@ python -m src.m2.run_m2 `
 
 ## Run tests
 
-The tests use only the Python standard library:
-
 ```powershell
 python -m unittest discover -s tests -v
 ```
 
-After installing the requirements, the equivalent command is `python -m pytest`.
+The equivalent shorter command is `python -m pytest -q`.
 
 ## Run the integrated parser
-
-After copying the three TV2 modules into `src/`:
 
 ```powershell
 python -m src.m2.run_m2 `
@@ -85,6 +65,12 @@ python -m src.m2.run_m2 `
 
 Use `--limit 20` for a sample run. A `_SUCCESS` marker makes later runs skip
 completed publications; pass `--force` to rebuild them.
+
+The corpus-level `m2_stats.json` records paper success, version coverage,
+deduplication counts, unresolved citation keys, running time, RAM and output
+size. Resume-only runs preserve the last complete fresh-run benchmark and put
+their own timing under `last_run`. Each paper's `stats.json` also records its
+compilation root, used/unused files and include diagnostics.
 
 Each publication is written independently:
 

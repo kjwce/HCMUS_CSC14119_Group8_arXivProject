@@ -59,6 +59,27 @@ class HierarchyTests(unittest.TestCase):
         self.assertEqual(kinds.count("list"), 2)
         self.assertEqual(kinds.count("item"), 3)
 
+    def test_standalone_table_environments_are_figures(self) -> None:
+        latex = r"""
+        \begin{document}
+        \begin{deluxetable*}{lc}
+        A & B \\
+        \end{deluxetable*}
+        \begin{sidewaystable*}
+        \begin{tabular}{lc}C & D\end{tabular}
+        \end{sidewaystable*}
+        \begin{center}
+        \begin{tabularx}{\textwidth}{lc}E & F\end{tabularx}
+        \end{center}
+        \end{document}
+        """
+        root = build_tree(latex, split_sentences)
+        figures = [node.content for node, _ in root.walk() if node.kind == "figure"]
+        self.assertEqual(len(figures), 3)
+        self.assertTrue(any("deluxetable*" in content for content in figures))
+        self.assertTrue(any("sidewaystable*" in content for content in figures))
+        self.assertTrue(any("tabularx" in content for content in figures))
+
     def test_escaped_percent_is_not_a_comment(self) -> None:
         self.assertEqual(strip_comments("100\\% kept % removed\nnext"), "100\\% kept \nnext")
 

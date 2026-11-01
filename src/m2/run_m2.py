@@ -1,9 +1,4 @@
-"""Parallel, resumable Milestone 2 runner.
-
-The runner is ready for the teammate-owned modules ``gather.py``, ``normalize.py``
-and ``bib.py``. Use ``--inventory`` before those modules arrive to validate an M1
-corpus without parsing it.
-"""
+"""Parallel, resumable end-to-end Milestone 2 runner."""
 
 from __future__ import annotations
 
@@ -206,7 +201,34 @@ def process_paper(
     arxiv_id, specs = load_version_specs(paper_dir)
     publication_dir = output_root / arxiv_id
     if (publication_dir / "_SUCCESS").is_file() and not force:
-        return {"arxiv_id": arxiv_id, "status": "skipped", "seconds": 0.0}
+        try:
+            previous = json.loads((publication_dir / "stats.json").read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            # A marker without readable statistics is incomplete; rebuild it.
+            pass
+        else:
+            unresolved = previous.get("unresolved_citation_keys") or {}
+            return {
+                "arxiv_id": arxiv_id,
+                "status": "skipped",
+                "seconds": 0.0,
+                "versions": int(previous.get("versions_seen", len(specs))),
+                "versions_parsed": int(previous.get("versions_parsed", 0)),
+                "empty_versions": len(previous.get("empty_versions") or []),
+                "elements_before_dedup": int(previous.get("elements_before_dedup", 0)),
+                "elements_after_dedup": int(previous.get("elements_after_dedup", 0)),
+                "bibtex_entries_before_dedup": int(
+                    previous.get("bibtex_entries_before_dedup", 0)
+                ),
+                "bibtex_entries_after_dedup": int(
+                    previous.get("bibtex_entries_after_dedup", 0)
+                ),
+                "unresolved_citation_keys": (
+                    sum(len(keys) for keys in unresolved.values())
+                    if isinstance(unresolved, dict)
+                    else int(unresolved)
+                ),
+            }
 
     gather_module, normalize_module, bib_module = _load_tv2_modules()
     gathered: dict[int, Any] = {}
@@ -229,6 +251,16 @@ def process_paper(
         version_status[version] = "gathered"
 
     unified_entries, rename_maps = bib_module.dedup(entries_by_version)
+    if isinstance(unified_entries, dict):
+        unified_entries = list(unified_entries.values())
+    bibtex_rows = [_entry_to_dict(entry, arxiv_id) for entry in unified_entries]
+    unified_keys = {
+        str(row.get("citation_key"))
+        for row in bibtex_rows
+        if row.get("citation_key") is not None
+    }
+    cite_keys = getattr(normalize_module, "cite_keys", None)
+    unresolved_citation_keys: dict[str, list[str]] = {}
     store = PublicationStore(arxiv_id)
     gather_stats: dict[str, Any] = {}
 
@@ -240,19 +272,33 @@ def process_paper(
         result = gathered[version]
         tree = build_tree(result.text, normalize_module.split_sentences)
         _normalize_tree(tree, normalize_module, _rename_map_for_version(rename_maps, version))
+        if callable(cite_keys):
+            cited = {
+                key
+                for node, _ in tree.walk()
+                for key in cite_keys(node.content)
+            }
+            missing = sorted(key for key in cited if key != "*" and key not in unified_keys)
+            if missing:
+                unresolved_citation_keys[f"v{version}"] = missing
         store.add_version(version, tree)
         gather_stats[f"v{version}"] = {
+            "root": result.root,
             "used_files": [str(path) for path in result.used_files],
             "unused_files": [str(path) for path in result.unused_files],
             "used_file_count": len(result.used_files),
             "unused_file_count": len(result.unused_files),
+            "missing_files": list(getattr(result, "missing_files", [])),
+            "cyclic_includes": list(getattr(result, "cyclic_includes", [])),
+            "non_utf8_files": list(getattr(result, "non_utf8_files", [])),
+            "root_candidates": list(getattr(result, "root_candidates", [])),
         }
         version_status[version] = "parsed"
 
-    if isinstance(unified_entries, dict):
-        unified_entries = list(unified_entries.values())
-    bibtex_rows = [_entry_to_dict(entry, arxiv_id) for entry in unified_entries]
     entries_before_dedup = sum(len(entries) for entries in entries_by_version.values())
+    source_counter = getattr(bib_module, "source_counts", None)
+    bibtex_source_counts = source_counter(entries_by_version) if callable(source_counter) else {}
+
     store.write(
         output_root,
         bibtex_rows,
@@ -261,6 +307,8 @@ def process_paper(
             "gather": gather_stats,
             "bibtex_entries_before_dedup": entries_before_dedup,
             "bibtex_entries_after_dedup": len(bibtex_rows),
+            "bibtex_source_counts_before_dedup": bibtex_source_counts,
+            "unresolved_citation_keys": unresolved_citation_keys,
         },
     )
     return {
@@ -274,6 +322,9 @@ def process_paper(
         "elements_after_dedup": len(store.elements),
         "bibtex_entries_before_dedup": entries_before_dedup,
         "bibtex_entries_after_dedup": len(bibtex_rows),
+        "unresolved_citation_keys": sum(
+            len(keys) for keys in unresolved_citation_keys.values()
+        ),
     }
 
 
@@ -295,9 +346,15 @@ def run(args: argparse.Namespace) -> int:
     _load_tv2_modules()
     output_root = Path(args.output).resolve()
     output_root.mkdir(parents=True, exist_ok=True)
+    stats_path = output_root / "m2_stats.json"
+    try:
+        previous_summary = json.loads(stats_path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        previous_summary = {}
     papers = discover_papers(input_root)
     if args.limit is not None:
         papers = papers[: args.limit]
+    versions_requested = sum(len(load_version_specs(paper)[1]) for paper in papers)
 
     started = time.perf_counter()
     memory = MemorySampler()
@@ -330,41 +387,118 @@ def run(args: argparse.Namespace) -> int:
         memory.stop()
 
     wall_time = time.perf_counter() - started
-    successful = [row for row in results if row["status"] == "ok"]
-    summary = {
-        "papers_requested": len(papers),
-        "papers_processed": len(successful),
-        "papers_skipped": sum(row["status"] == "skipped" for row in results),
-        "papers_failed": len(errors),
-        "parse_success_rate": len(successful) / len(papers) if papers else 0.0,
+    freshly_processed = [row for row in results if row["status"] == "ok"]
+    completed = [row for row in results if row["status"] in {"ok", "skipped"}]
+    skipped = [row for row in results if row["status"] == "skipped"]
+    last_run = {
         "wall_time_s": round(wall_time, 3),
         "avg_seconds_per_processed_paper": (
-            round(sum(row["seconds"] for row in successful) / len(successful), 6)
-            if successful
+            round(
+                sum(row["seconds"] for row in freshly_processed) / len(freshly_processed),
+                6,
+            )
+            if freshly_processed
             else None
-        ),
-        "versions_parsed": sum(row.get("versions_parsed", 0) for row in successful),
-        "empty_versions": sum(row.get("empty_versions", 0) for row in successful),
-        "elements_before_dedup": sum(
-            row.get("elements_before_dedup", 0) for row in successful
-        ),
-        "elements_after_dedup": sum(
-            row.get("elements_after_dedup", 0) for row in successful
-        ),
-        "bibtex_entries_before_dedup": sum(
-            row.get("bibtex_entries_before_dedup", 0) for row in successful
-        ),
-        "bibtex_entries_after_dedup": sum(
-            row.get("bibtex_entries_after_dedup", 0) for row in successful
         ),
         "peak_ram_mb": memory.peak_mb,
         "avg_ram_mb": memory.average_mb,
-        "output_bytes": _directory_size(output_root),
         "workers": workers,
+        "papers_freshly_processed": len(freshly_processed),
+        "papers_skipped": len(skipped),
     }
-    (output_root / "m2_stats.json").write_text(
+    full_benchmark = len(freshly_processed) == len(papers) and not errors
+    previous_benchmark = previous_summary.get("benchmark")
+    if not isinstance(previous_benchmark, dict) and previous_summary:
+        previous_benchmark = {
+            "complete_corpus_run": (
+                previous_summary.get("papers_processed")
+                == previous_summary.get("papers_requested")
+                and previous_summary.get("papers_failed", 0) == 0
+            ),
+            "wall_time_s": previous_summary.get("wall_time_s"),
+            "avg_seconds_per_processed_paper": previous_summary.get(
+                "avg_seconds_per_processed_paper"
+            ),
+            "peak_ram_mb": previous_summary.get("peak_ram_mb"),
+            "avg_ram_mb": previous_summary.get("avg_ram_mb"),
+            "workers": previous_summary.get("workers"),
+            "papers_requested": previous_summary.get("papers_requested"),
+            "versions_requested": previous_summary.get("versions_requested"),
+        }
+    if isinstance(previous_benchmark, dict) and (
+        previous_benchmark.get("papers_requested", len(papers)) != len(papers)
+        or previous_benchmark.get("versions_requested", versions_requested)
+        != versions_requested
+    ):
+        # A benchmark produced with another --limit value is a different scope.
+        previous_benchmark = None
+    if full_benchmark or not isinstance(previous_benchmark, dict):
+        benchmark = {
+            "complete_corpus_run": full_benchmark,
+            "papers_requested": len(papers),
+            "versions_requested": versions_requested,
+            **{
+                key: last_run[key]
+                for key in (
+                    "wall_time_s",
+                    "avg_seconds_per_processed_paper",
+                    "peak_ram_mb",
+                    "avg_ram_mb",
+                    "workers",
+                )
+            },
+        }
+    else:
+        benchmark = previous_benchmark
+
+    versions_parsed = sum(row.get("versions_parsed", 0) for row in completed)
+    summary = {
+        "papers_requested": len(papers),
+        "papers_processed": len(completed),
+        "papers_freshly_processed": len(freshly_processed),
+        "papers_skipped": len(skipped),
+        "papers_failed": len(errors),
+        "parse_success_rate": len(completed) / len(papers) if papers else 0.0,
+        "versions_requested": versions_requested,
+        "version_parse_coverage": (
+            versions_parsed / versions_requested
+            if versions_requested
+            else 0.0
+        ),
+        "versions_parsed": versions_parsed,
+        "empty_versions": sum(row.get("empty_versions", 0) for row in completed),
+        "elements_before_dedup": sum(
+            row.get("elements_before_dedup", 0) for row in completed
+        ),
+        "elements_after_dedup": sum(
+            row.get("elements_after_dedup", 0) for row in completed
+        ),
+        "bibtex_entries_before_dedup": sum(
+            row.get("bibtex_entries_before_dedup", 0) for row in completed
+        ),
+        "bibtex_entries_after_dedup": sum(
+            row.get("bibtex_entries_after_dedup", 0) for row in completed
+        ),
+        "unresolved_citation_keys": sum(
+            row.get("unresolved_citation_keys", 0) for row in completed
+        ),
+        # Keep the full fresh-run benchmark stable across resume-only runs.
+        "wall_time_s": benchmark.get("wall_time_s"),
+        "avg_seconds_per_processed_paper": benchmark.get(
+            "avg_seconds_per_processed_paper"
+        ),
+        "peak_ram_mb": benchmark.get("peak_ram_mb"),
+        "avg_ram_mb": benchmark.get("avg_ram_mb"),
+        "output_bytes": _directory_size(output_root),
+        "workers": benchmark.get("workers"),
+        "benchmark": benchmark,
+        "last_run": last_run,
+    }
+    temporary_stats = stats_path.with_suffix(".json.tmp")
+    temporary_stats.write_text(
         json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8"
     )
+    os.replace(temporary_stats, stats_path)
     with (output_root / "errors.jsonl").open("w", encoding="utf-8") as handle:
         for error in errors:
             handle.write(json.dumps(error, ensure_ascii=False) + "\n")
