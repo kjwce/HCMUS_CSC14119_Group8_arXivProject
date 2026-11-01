@@ -42,7 +42,7 @@ Do not commit `s2_api_key.txt` or the output directory.
 
 ```powershell
 python -m src.m2.run_m2 `
-  --input "D:\HocTapHCMUS\NM_KHDL\crawlweb\raw" `
+  --input "D:\path\to\m1_raw" `
   --inventory
 ```
 
