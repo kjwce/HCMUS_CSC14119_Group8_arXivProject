@@ -68,9 +68,11 @@ completed publications; pass `--force` to rebuild them.
 
 The corpus-level `m2_stats.json` records paper success, version coverage,
 deduplication counts, unresolved citation keys, running time, RAM and output
-size. Resume-only runs preserve the last complete fresh-run benchmark and put
-their own timing under `last_run`. Each paper's `stats.json` also records its
-compilation root, used/unused files and include diagnostics.
+size. `paper_stats.jsonl` collects the complete `stats.json` record from every
+successfully processed paper into one streaming-friendly file. Resume-only runs
+preserve the last complete fresh-run benchmark and put their own timing under
+`last_run`. Each paper's `stats.json` also records its compilation root,
+used/unused files and include diagnostics.
 
 Each publication is written independently:
 
@@ -82,6 +84,9 @@ m2_processed/<arxiv-id>/
 ├── stats.json
 └── _SUCCESS
 ```
+
+At the output root, `m2_stats.json`, `paper_stats.jsonl`, and `errors.jsonl`
+provide the corpus summary, all per-paper diagnostics, and failures respectively.
 
 Raw data, logs, archives, secrets, and generated outputs are excluded by
 `.gitignore` and must not be pushed to GitHub.

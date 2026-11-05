@@ -83,6 +83,46 @@ class HierarchyTests(unittest.TestCase):
     def test_escaped_percent_is_not_a_comment(self) -> None:
         self.assertEqual(strip_comments("100\\% kept % removed\nnext"), "100\\% kept \nnext")
 
+    def test_front_matter_abstract_and_formula_connectors(self) -> None:
+        latex = r"""
+        \begin{document}
+        \title{Leaked title}
+        \author[0000-0000]{Leaked author}[orcid=0000-0000]
+        \affiliation{Leaked affiliation}
+        \cormark[1]
+        \cortext[1]{Leaked corresponding-author note}
+        \date{\today}
+        \maketitle
+        \begin{abstract}
+        Abstract first sentence. Abstract second sentence.
+        \end{abstract}
+        \begin{keywords}Leaked keyword\end{keywords}
+        \section{Body}
+        A complete sentence.
+        \begin{equation}a=b\end{equation}
+        with
+        \begin{equation}c=d\end{equation}
+        Thus:
+        \begin{equation}e=f\end{equation}
+        \begin{proof}Proof sentence.\end{proof}
+        \end{document}
+        """
+        root = build_tree(latex, split_sentences)
+        nodes = [(node.kind, node.content) for node, _ in root.walk()]
+        contents = [content for _, content in nodes]
+        abstracts = [node for node, _ in root.walk() if node.kind == "abstract"]
+
+        self.assertEqual(len(abstracts), 1)
+        self.assertEqual(
+            [child.content for child in abstracts[0].children],
+            ["Abstract first sentence.", "Abstract second sentence."],
+        )
+        self.assertFalse(any("Leaked" in content or "abstract}" in content for content in contents))
+        self.assertNotIn("with", contents)
+        self.assertIn("Thus:", contents)
+        self.assertIn("Proof sentence.", contents)
+        self.assertFalse(any("\\begin{proof}" in content or "\\end{proof}" in content for content in contents))
+
 
 if __name__ == "__main__":
     unittest.main()

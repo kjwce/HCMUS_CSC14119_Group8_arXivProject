@@ -19,6 +19,8 @@ from .hierarchy import build_tree
 from .models import Node
 from .store import PublicationStore, normalize_arxiv_id
 
+PARSER_SCHEMA_VERSION = 2
+
 
 def _version_number(value: str | int) -> int:
     return int(str(value).lower().removeprefix("v"))
@@ -201,12 +203,20 @@ def process_paper(
     arxiv_id, specs = load_version_specs(paper_dir)
     publication_dir = output_root / arxiv_id
     if (publication_dir / "_SUCCESS").is_file() and not force:
+        previous: dict[str, Any] | None = None
         try:
             previous = json.loads((publication_dir / "stats.json").read_text(encoding="utf-8"))
         except (OSError, json.JSONDecodeError):
             # A marker without readable statistics is incomplete; rebuild it.
             pass
         else:
+            if not isinstance(previous, dict):
+                previous = None
+            elif previous.get("parser_schema_version") != PARSER_SCHEMA_VERSION:
+                # Parser fixes can change element IDs and hierarchy.  Outputs
+                # from an older schema must not be silently reused.
+                previous = None
+        if previous is not None:
             unresolved = previous.get("unresolved_citation_keys") or {}
             return {
                 "arxiv_id": arxiv_id,
@@ -303,6 +313,7 @@ def process_paper(
         output_root,
         bibtex_rows,
         {
+            "parser_schema_version": PARSER_SCHEMA_VERSION,
             "version_status": version_status,
             "gather": gather_stats,
             "bibtex_entries_before_dedup": entries_before_dedup,
@@ -330,6 +341,25 @@ def process_paper(
 
 def _directory_size(path: Path) -> int:
     return sum(item.stat().st_size for item in path.rglob("*") if item.is_file())
+
+
+def _write_paper_stats_jsonl(output_root: Path, arxiv_ids: list[str]) -> int:
+    """Collect every completed publication's full ``stats.json`` into one file."""
+
+    destination = output_root / "paper_stats.jsonl"
+    temporary = destination.with_suffix(destination.suffix + ".tmp")
+    records = 0
+    with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+        for arxiv_id in sorted(set(arxiv_ids)):
+            source = output_root / arxiv_id / "stats.json"
+            try:
+                stats = json.loads(source.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            handle.write(json.dumps(stats, ensure_ascii=False) + "\n")
+            records += 1
+    os.replace(temporary, destination)
+    return records
 
 
 def run(args: argparse.Namespace) -> int:
@@ -390,6 +420,9 @@ def run(args: argparse.Namespace) -> int:
     freshly_processed = [row for row in results if row["status"] == "ok"]
     completed = [row for row in results if row["status"] in {"ok", "skipped"}]
     skipped = [row for row in results if row["status"] == "skipped"]
+    paper_stats_records = _write_paper_stats_jsonl(
+        output_root, [str(row["arxiv_id"]) for row in completed]
+    )
     last_run = {
         "wall_time_s": round(wall_time, 3),
         "avg_seconds_per_processed_paper": (
@@ -453,6 +486,7 @@ def run(args: argparse.Namespace) -> int:
 
     versions_parsed = sum(row.get("versions_parsed", 0) for row in completed)
     summary = {
+        "parser_schema_version": PARSER_SCHEMA_VERSION,
         "papers_requested": len(papers),
         "papers_processed": len(completed),
         "papers_freshly_processed": len(freshly_processed),
@@ -482,6 +516,8 @@ def run(args: argparse.Namespace) -> int:
         "unresolved_citation_keys": sum(
             row.get("unresolved_citation_keys", 0) for row in completed
         ),
+        "paper_stats_file": "paper_stats.jsonl",
+        "paper_stats_records": paper_stats_records,
         # Keep the full fresh-run benchmark stable across resume-only runs.
         "wall_time_s": benchmark.get("wall_time_s"),
         "avg_seconds_per_processed_paper": benchmark.get(

@@ -5,7 +5,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.m2.run_m2 import process_paper
+from src.m2.run_m2 import PARSER_SCHEMA_VERSION, _write_paper_stats_jsonl, process_paper
 
 
 class RunnerIntegrationTests(unittest.TestCase):
@@ -30,8 +30,12 @@ class RunnerIntegrationTests(unittest.TestCase):
             (version / "main.tex").write_text(
                 r"""\documentclass{article}
 \begin{document}
+\title{Must not leak}
+\author{Hidden Author}
+\begin{abstract}Abstract sentence.\end{abstract}
 \section{Intro}
 A cited sentence \cite{paper2020}.
+\begin{align}x &= y \\ z &= q\end{align}
 \begin{deluxetable*}{lc}A & B \\\end{deluxetable*}
 \bibliography{refs}
 \end{document}
@@ -47,20 +51,36 @@ A cited sentence \cite{paper2020}.
             result = process_paper(str(paper), str(root / "processed"))
             resumed = process_paper(str(paper), str(root / "processed"))
             publication = root / "processed" / "2603-00001"
+            stale_stats = json.loads((publication / "stats.json").read_text(encoding="utf-8"))
+            stale_stats["parser_schema_version"] = PARSER_SCHEMA_VERSION - 1
+            (publication / "stats.json").write_text(json.dumps(stale_stats), encoding="utf-8")
+            rebuilt = process_paper(str(paper), str(root / "processed"))
             stats = json.loads((publication / "stats.json").read_text(encoding="utf-8"))
             elements = [
                 json.loads(line)
                 for line in (publication / "elements.jsonl").read_text(encoding="utf-8").splitlines()
             ]
+            aggregate_count = _write_paper_stats_jsonl(root / "processed", ["2603-00001"])
+            aggregate = [
+                json.loads(line)
+                for line in (root / "processed" / "paper_stats.jsonl").read_text(encoding="utf-8").splitlines()
+            ]
 
         self.assertEqual(result["status"], "ok")
         self.assertEqual(resumed["status"], "skipped")
+        self.assertEqual(rebuilt["status"], "ok")
         self.assertEqual(resumed["versions_parsed"], 1)
         self.assertEqual(resumed["elements_after_dedup"], result["elements_after_dedup"])
         self.assertEqual((result["versions_parsed"], result["empty_versions"]), (1, 1))
         self.assertEqual(stats["gather"]["v1"]["root"], "main.tex")
         self.assertEqual(stats["bibtex_source_counts_before_dedup"], {"bib": 1})
         self.assertEqual(stats["unresolved_citation_keys"], {})
+        self.assertEqual(stats["parser_schema_version"], PARSER_SCHEMA_VERSION)
+        self.assertEqual((aggregate_count, len(aggregate)), (1, 1))
+        self.assertEqual(aggregate[0]["arxiv_id"], "2603-00001")
+        self.assertTrue(any(row["kind"] == "abstract" for row in elements))
+        self.assertFalse(any("Must not leak" in row["content"] or "Hidden Author" in row["content"] for row in elements))
+        self.assertTrue(any(row["kind"] == "formula" and "\\begin{aligned}" in row["content"] for row in elements))
         self.assertTrue(any(row["kind"] == "figure" and "deluxetable" in row["content"] for row in elements))
 
 

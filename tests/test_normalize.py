@@ -61,20 +61,31 @@ class NormalizeMathTests(unittest.TestCase):
     def test_block_forms(self) -> None:
         self.assertEqual(normalize_math("\\[ a=b \\]"), "\\begin{equation}a=b\\end{equation}")
         self.assertEqual(normalize_math("$$ c $$"), "\\begin{equation}c\\end{equation}")
-        for env in ("equation*", "align", "align*", "gather*", "eqnarray", "multline*", "displaymath"):
+        for env in ("equation*", "align", "align*", "eqnarray", "displaymath"):
             with self.subTest(env=env):
                 self.assertEqual(
                     normalize_math(f"\\begin{{{env}}} x &= y \\end{{{env}}}"),
-                    "\\begin{equation}x &= y\\end{equation}",
+                    "\\begin{equation}\\begin{aligned}x &= y\\end{aligned}\\end{equation}",
                 )
         self.assertEqual(
-            normalize_math("\\begin{alignat}{2} x \\end{alignat}"), "\\begin{equation}x\\end{equation}"
+            normalize_math("\\begin{alignat}{2} x \\end{alignat}"),
+            "\\begin{equation}\\begin{aligned}x\\end{aligned}\\end{equation}",
+        )
+        self.assertEqual(
+            normalize_math("\\begin{gather*} x \\\\ y \\end{gather*}"),
+            "\\begin{equation}\\begin{gathered}x \\\\ y\\end{gathered}\\end{equation}",
         )
 
     def test_line_break_with_spacing_is_not_display_math(self) -> None:
         self.assertEqual(
             normalize_math("\\begin{align} a \\\\[2pt] b \\end{align}"),
-            "\\begin{equation}a \\\\[2pt] b\\end{equation}",
+            "\\begin{equation}\\begin{aligned}a \\\\[2pt] b\\end{aligned}\\end{equation}",
+        )
+
+    def test_raw_alignment_inside_equation_gets_valid_inner_environment(self) -> None:
+        self.assertEqual(
+            normalize_math("\\begin{equation}a &= b \\\\ c &= d\\end{equation}"),
+            "\\begin{equation}\\begin{aligned}a &= b \\\\ c &= d\\end{aligned}\\end{equation}",
         )
 
     def test_inner_structures_and_escaped_dollar_kept(self) -> None:

@@ -274,15 +274,34 @@ def split_sentences(text: str) -> list[str]:
 BLOCK_MATH_ENVIRONMENTS = (
     "equation", "displaymath", "align", "alignat", "flalign", "gather", "multline", "eqnarray",
 )
-_BLOCK_BEGIN_RE = re.compile(
-    r"\\begin\s*\{(?:" + "|".join(BLOCK_MATH_ENVIRONMENTS) + r")\*?\}(?:\s*\{\d+\})?\s*"
+_BLOCK_ENV_RE = re.compile(
+    r"\\begin\s*\{(?P<env>"
+    + "|".join(BLOCK_MATH_ENVIRONMENTS)
+    + r")\*?\}(?:\s*\{\d+\})?\s*(?P<body>.*?)\s*"
+    r"\\end\s*\{(?P=env)\*?\}",
+    re.DOTALL | re.IGNORECASE,
 )
-_BLOCK_END_RE = re.compile(r"\s*\\end\s*\{(?:" + "|".join(BLOCK_MATH_ENVIRONMENTS) + r")\*?\}")
 _INLINE_ENV_RE = re.compile(r"\\begin\s*\{math\}\s*(.*?)\s*\\end\s*\{math\}", re.DOTALL)
+_BRACKET_DISPLAY_RE = re.compile(r"\\\[(.+?)\\\]", re.DOTALL)
 # ``\\\\`` comes first so the line break ``\\[2pt]`` is never read as ``\[``.
 _DELIMITER_RE = re.compile(r"\\\\|\\\(|\\\)|\\\[|\\\]")
 _DOUBLE_DOLLAR_RE = re.compile(r"(?<!\\)\$\$(.+?)(?<!\\)\$\$", re.DOTALL)
 _EQUATION_PADDING_RE = re.compile(r"(\\begin\{equation\})\s+|\s+(\\end\{equation\})")
+_INNER_MATH_STRUCTURE_RE = re.compile(
+    r"\\begin\s*\{(?:aligned|alignedat|split|cases|array|matrix|pmatrix|bmatrix|"
+    r"Bmatrix|vmatrix|Vmatrix|smallmatrix|gathered)\*?\}",
+    re.IGNORECASE,
+)
+_UNESCAPED_ALIGNMENT_RE = re.compile(r"(?<!\\)&|(?<!\\)\\\\")
+
+
+def _normalized_equation(body: str, wrapper: str | None = None) -> str:
+    body = body.strip()
+    if wrapper is None and _UNESCAPED_ALIGNMENT_RE.search(body) and not _INNER_MATH_STRUCTURE_RE.search(body):
+        wrapper = "aligned"
+    if wrapper:
+        body = f"\\begin{{{wrapper}}}{body}\\end{{{wrapper}}}"
+    return f"\\begin{{equation}}{body}\\end{{equation}}"
 
 
 def normalize_math(text: str) -> str:
@@ -292,13 +311,27 @@ def normalize_math(text: str) -> str:
     (``$$..$$``, ``\\[..\\]``, ``equation*``, ``align(*)``, ``gather(*)``,
     ``multline(*)``, ``eqnarray(*)``, ``flalign(*)``, ``alignat(*)``,
     ``displaymath``) becomes ``\\begin{equation}..\\end{equation}``. Inner
-    structures such as ``aligned``/``split``/``cases`` and the ``&``/``\\\\``
-    alignment marks are kept unchanged.
+    structures such as ``aligned``/``split``/``cases`` are kept. Multi-line
+    alignment markers are wrapped in ``aligned`` or ``gathered`` so the
+    resulting ``equation`` environment remains valid LaTeX.
     """
 
     if "\\" not in text and "$" not in text:
         return text
     text = _INLINE_ENV_RE.sub(lambda match: f"${match.group(1)}$", text)
+
+    def block_environment(match: re.Match[str]) -> str:
+        environment = match.group("env").lower()
+        body = match.group("body")
+        if environment in {"align", "alignat", "flalign", "eqnarray"}:
+            return _normalized_equation(body, "aligned")
+        if environment in {"gather", "multline"}:
+            wrapper = "aligned" if re.search(r"(?<!\\)&", body) else "gathered"
+            return _normalized_equation(body, wrapper)
+        return _normalized_equation(body)
+
+    text = _BLOCK_ENV_RE.sub(block_environment, text)
+    text = _BRACKET_DISPLAY_RE.sub(lambda match: _normalized_equation(match.group(1)), text)
 
     def delimiter(match: re.Match[str]) -> str:
         token = match.group(0)
@@ -311,9 +344,7 @@ def normalize_math(text: str) -> str:
         return token
 
     text = _DELIMITER_RE.sub(delimiter, text)
-    text = _DOUBLE_DOLLAR_RE.sub(lambda match: f"\\begin{{equation}}{match.group(1)}\\end{{equation}}", text)
-    text = _BLOCK_BEGIN_RE.sub(lambda _: "\\begin{equation}", text)
-    text = _BLOCK_END_RE.sub(lambda _: "\\end{equation}", text)
+    text = _DOUBLE_DOLLAR_RE.sub(lambda match: _normalized_equation(match.group(1)), text)
     return _EQUATION_PADDING_RE.sub(lambda match: match.group(1) or match.group(2), text)
 
 

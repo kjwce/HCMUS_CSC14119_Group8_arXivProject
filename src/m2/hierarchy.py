@@ -23,7 +23,9 @@ HEADING_ORDER = (
     "paragraph",
     "subparagraph",
 )
-LIST_ENVIRONMENTS = {"itemize", "enumerate", "description"}
+LIST_ENVIRONMENTS = {"itemize", "enumerate", "description", "highlights"}
+ABSTRACT_ENVIRONMENTS = {"abstract", "abstract*"}
+KEYWORD_ENVIRONMENTS = {"keyword", "keywords"}
 MATH_ENVIRONMENTS = {
     "equation",
     "equation*",
@@ -71,6 +73,8 @@ FIGURE_ENVIRONMENTS = {
 }
 SPECIAL_ENVIRONMENTS = (
     LIST_ENVIRONMENTS
+    | ABSTRACT_ENVIRONMENTS
+    | KEYWORD_ENVIRONMENTS
     | MATH_ENVIRONMENTS
     | FIGURE_ENVIRONMENTS
     | {"thebibliography"}
@@ -92,11 +96,65 @@ _EVENT_RE = re.compile(
     r"|\\begin\s*\{(?:"
     + "|".join(re.escape(name) for name in sorted(SPECIAL_ENVIRONMENTS, key=len, reverse=True))
     + r")\}"
-    r"|\$\$|\\\[|\\appendix\b|\\(?:bibliography|printbibliography)\b",
+    r"|\$\$|\\\[|\\abstract\b|\\appendix\b|\\(?:bibliography|printbibliography)\b",
     re.IGNORECASE,
 )
 _BEGIN_END_RE = re.compile(r"\\(?P<action>begin|end)\s*\{(?P<env>[^{}]+)\}", re.IGNORECASE)
 _ITEM_RE = re.compile(r"\\item(?:\s*\[[^\]]*\])?", re.IGNORECASE)
+
+# Front-matter commands carry publication metadata rather than paper prose.  They
+# occur both before and after ``\\begin{document}`` depending on the document
+# class, so merely slicing out the preamble is insufficient.
+_FRONT_MATTER_ARGUMENTS = {
+    "@ifundefined": 3,
+    "accepted": 1,
+    "address": 1,
+    "affil": 1,
+    "affiliation": 1,
+    "altaffiliation": 1,
+    "articletype": 1,
+    "author": 1,
+    "authorrunning": 1,
+    "collaboration": 1,
+    "cormark": 0,
+    "cortext": 1,
+    "correspondingauthor": 1,
+    "date": 1,
+    "ead": 1,
+    "email": 1,
+    "fnmark": 0,
+    "fntext": 1,
+    "institute": 1,
+    "keywords": 1,
+    "makeatletter": 0,
+    "makeatother": 0,
+    "maketitle": 0,
+    "received": 1,
+    "revised": 1,
+    "shortauthors": 1,
+    "shorttitle": 1,
+    "subject": 1,
+    "submitjournal": 1,
+    "tnotemark": 0,
+    "tnotetext": 1,
+    "thanks": 1,
+    "title": 1,
+    "titlerunning": 1,
+}
+_FRONT_MATTER_RE = re.compile(
+    r"\\(?P<name>"
+    + "|".join(re.escape(name) for name in sorted(_FRONT_MATTER_ARGUMENTS, key=len, reverse=True))
+    + r")\*?(?![A-Za-z@])",
+    re.IGNORECASE,
+)
+_RESIDUAL_ENVIRONMENT_RE = re.compile(
+    r"\\(?:begin|end)\s*\{[^{}]+\}(?:\s*\[[^\]]*\])?",
+    re.IGNORECASE,
+)
+_RESIDUAL_STRUCTURE_COMMAND_RE = re.compile(
+    r"\\(?:tableofcontents|listoffigures|listoftables)\b", re.IGNORECASE
+)
+_ORPHAN_CONNECTORS = {"and", "or", "with", "along with", "where", "whereas", "here"}
 
 
 def _is_escaped(text: str, index: int) -> bool:
@@ -199,6 +257,51 @@ def _extract_document_body(text: str) -> str:
     return text[begin.end() : end]
 
 
+def _strip_front_matter_commands(text: str) -> str:
+    """Remove balanced title/author/affiliation metadata from document prose."""
+
+    output: list[str] = []
+    position = 0
+    for match in _FRONT_MATTER_RE.finditer(text):
+        if match.start() < position:
+            continue
+        output.append(text[position : match.start()])
+        index = _skip_space(text, match.end())
+        # Classes commonly add one or more optional attributes (short author,
+        # ORCID, affiliation number).  They belong to the removed command too.
+        while index < len(text) and text[index] == "[":
+            optional = _read_balanced(text, index, "[", "]")
+            if optional is None:
+                break
+            _, index = optional
+            index = _skip_space(text, index)
+
+        valid = True
+        for _ in range(_FRONT_MATTER_ARGUMENTS[match.group("name").lower()]):
+            argument = _read_balanced(text, index, "{", "}")
+            if argument is None:
+                valid = False
+                break
+            _, index = argument
+            index = _skip_space(text, index)
+        # Elsevier-style author commands may put ORCID metadata after the
+        # mandatory name: ``\\author[1]{Name}[orcid=...]``.
+        while valid and index < len(text) and text[index] == "[":
+            optional = _read_balanced(text, index, "[", "]")
+            if optional is None:
+                break
+            _, index = optional
+            index = _skip_space(text, index)
+        if valid:
+            position = index
+        else:
+            # Preserve malformed input rather than accidentally discarding prose.
+            output.append(match.group(0))
+            position = match.end()
+    output.append(text[position:])
+    return "".join(output)
+
+
 def _active_heading_levels(text: str) -> dict[str, int]:
     used = {match.group("name").lower() for match in _HEADING_COMMAND_RE.finditer(text)}
     return {name: level for level, name in enumerate(name for name in HEADING_ORDER if name in used)}
@@ -207,6 +310,11 @@ def _active_heading_levels(text: str) -> dict[str, int]:
 def _add_sentences(parent: Node, text: str, split_sentences: SentenceSplitter) -> None:
     if not text or not text.strip():
         return
+    # Unknown theorem/proof/center wrappers are layout, not sentence content.
+    # Recognized math/list/figure/abstract environments are intercepted before
+    # reaching this function, so removing residual delimiters is safe.
+    text = _RESIDUAL_ENVIRONMENT_RE.sub(" ", text)
+    text = _RESIDUAL_STRUCTURE_COMMAND_RE.sub(" ", text)
     for sentence in split_sentences(text):
         sentence = sentence.strip()
         if sentence and not re.fullmatch(r"(?:\\[A-Za-z@]+\*?\s*)+", sentence):
@@ -270,7 +378,12 @@ def _parse_fragment(parent: Node, text: str, split_sentences: SentenceSplitter) 
             full = text[match.start() : close_end].strip()
             if environment == "thebibliography":
                 return
-            if environment in MATH_ENVIRONMENTS:
+            if environment in KEYWORD_ENVIRONMENTS:
+                pass
+            elif environment in ABSTRACT_ENVIRONMENTS:
+                abstract = parent.add(Node("abstract", "Abstract"))
+                _parse_fragment(abstract, inner, split_sentences)
+            elif environment in MATH_ENVIRONMENTS:
                 parent.add(Node("formula", full))
             elif environment in FIGURE_ENVIRONMENTS:
                 parent.add(Node("figure", full))
@@ -315,6 +428,29 @@ def _parse_fragment(parent: Node, text: str, split_sentences: SentenceSplitter) 
             position = match.end()
 
 
+def _prune_orphan_connectors(node: Node) -> None:
+    """Drop connector-only fragments split off between block formulas.
+
+    Short sentences are not removed generally: ``Thus:`` and ``Define`` can be
+    meaningful formula introductions.  Only a small closed set of connectors is
+    dropped when directly adjacent to a formula block.
+    """
+
+    for child in node.children:
+        _prune_orphan_connectors(child)
+    kept: list[Node] = []
+    for index, child in enumerate(node.children):
+        plain = re.sub(r"[^a-z]+", " ", child.content.lower()).strip()
+        adjacent_formula = (
+            (index > 0 and node.children[index - 1].kind == "formula")
+            or (index + 1 < len(node.children) and node.children[index + 1].kind == "formula")
+        )
+        if child.kind == "sentence" and plain in _ORPHAN_CONNECTORS and adjacent_formula:
+            continue
+        kept.append(child)
+    node.children = kept
+
+
 def build_tree(text: str, split_sentences: SentenceSplitter) -> Node:
     """Parse flattened LaTeX into a document tree.
 
@@ -326,7 +462,7 @@ def build_tree(text: str, split_sentences: SentenceSplitter) -> Node:
     if not callable(split_sentences):
         raise TypeError("split_sentences must be callable")
 
-    body = _extract_document_body(strip_comments(text))
+    body = _strip_front_matter_commands(_extract_document_body(strip_comments(text)))
     levels = _active_heading_levels(body)
     root = Node("document", "Document")
     stack: list[tuple[int, Node]] = [(-1, root)]
@@ -370,6 +506,15 @@ def build_tree(text: str, split_sentences: SentenceSplitter) -> Node:
             if begin and begin.group("env").lower() == "thebibliography":
                 break
 
+        if lowered.startswith("\\abstract") and not lowered.startswith("\\begin"):
+            index = _skip_space(body, match.end())
+            argument = _read_balanced(body, index, "{", "}")
+            if argument is not None:
+                content, position = argument
+                abstract = root.add(Node("abstract", "Abstract"))
+                _parse_fragment(abstract, content, split_sentences)
+                continue
+
         # Delegate the complete block to the fragment parser, then advance past it.
         if lowered.startswith("\\begin"):
             begin = _SPECIAL_BEGIN_RE.match(body, match.start())
@@ -378,7 +523,8 @@ def build_tree(text: str, split_sentences: SentenceSplitter) -> Node:
                 end = _find_environment_end(body, match.start(), environment)
                 if end:
                     close_end = end[1]
-                    _parse_fragment(current, body[match.start() : close_end], split_sentences)
+                    target = root if environment in ABSTRACT_ENVIRONMENTS else current
+                    _parse_fragment(target, body[match.start() : close_end], split_sentences)
                     position = close_end
                     continue
         elif token == "$$":
@@ -397,5 +543,6 @@ def build_tree(text: str, split_sentences: SentenceSplitter) -> Node:
 
         position = match.end()
 
+    _prune_orphan_connectors(root)
     return root
 
