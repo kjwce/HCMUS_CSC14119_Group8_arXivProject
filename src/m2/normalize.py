@@ -399,6 +399,11 @@ _FLOAT_OPTIONS_RE = re.compile(
 _WRAP_ARGUMENTS_RE = re.compile(
     r"(\\begin\s*\{(?:wrapfigure|wraptable)\})\s*\{[^{}]*\}\s*\{(?:[^{}]|\{[^{}]*\})*\}"
 )
+# ``{\bf Heading}``: a TeX group opened only to hold a font switch.
+_SWITCH_GROUP_RE = re.compile(
+    r"\{\s*\\(?:" + "|".join(sorted(FORMATTING_SWITCHES, key=len, reverse=True)) + r")\*?(?![A-Za-z@])\s*"
+)
+_COMMAND_BEFORE_RE = re.compile(r"\\[A-Za-z@]+\*?\s*$")
 # ``~`` is a non-breaking space, except inside URLs (``\url{http://x.edu/~me}``).
 _TILDE_RE = re.compile(r"\\(?:url|href)\s*\{[^{}]*\}|(?:https?|ftp)://[^\s{}]+|(?<!\\)~")
 _SPACING_RE = re.compile(r"\\[@/](?![A-Za-z])")
@@ -464,6 +469,39 @@ def _rewrite_commands(text: str, specs: tuple[tuple[str, int, int], ...], keep_l
         position = end
 
 
+def _unwrap_switch_groups(text: str) -> str:
+    """``{\\bf Title}. Text`` -> ``Title. Text``.
+
+    Removing only the switch would leave ``{ Title}``. The braces are kept when
+    they are an argument: after a command (``\\footnote{\\bf x}``), a ``]`` or
+    ``}`` (optional/second argument), or ``_``/``^`` in math (``f_{\\rm sed}``).
+    """
+
+    match = _SWITCH_GROUP_RE.search(text)
+    if match is None:
+        return text
+    output: list[str] = []
+    position = 0
+    while match is not None:
+        start = match.start()
+        before = text[:start].rstrip()
+        end = _skip_balanced(text, start, "{", "}")
+        is_argument = (
+            (before and before[-1] in "_^]}")
+            or _COMMAND_BEFORE_RE.search(text, max(0, start - 40), start) is not None
+        )
+        if is_argument or end <= start or text[end - 1] != "}":
+            output.append(text[position : match.end()])
+            position = match.end()
+        else:
+            output.append(text[position:start])
+            output.append(_unwrap_switch_groups(text[match.end() : end - 1]))
+            position = end
+        match = _SWITCH_GROUP_RE.search(text, position)
+    output.append(text[position:])
+    return "".join(output)
+
+
 def clean(text: str) -> str:
     """Remove formatting that has no semantic meaning and normalize spacing.
 
@@ -483,6 +521,7 @@ def clean(text: str) -> str:
         text = _WRAP_ARGUMENTS_RE.sub(r"\1", text)
         text = _rewrite_commands(text, REMOVED_WITH_ARGUMENTS, keep_last=False)
         text = _rewrite_commands(text, UNWRAPPED_COMMANDS, keep_last=True)
+        text = _unwrap_switch_groups(text)
         text = _SWITCH_RE.sub(" ", text)
         text = _SPACING_RE.sub("", text)
     if "~" in text:

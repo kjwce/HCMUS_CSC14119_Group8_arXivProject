@@ -315,10 +315,47 @@ def _add_sentences(parent: Node, text: str, split_sentences: SentenceSplitter) -
     # reaching this function, so removing residual delimiters is safe.
     text = _RESIDUAL_ENVIRONMENT_RE.sub(" ", text)
     text = _RESIDUAL_STRUCTURE_COMMAND_RE.sub(" ", text)
+    target = parent
     for sentence in split_sentences(text):
         sentence = sentence.strip()
+        run_in = _split_run_in_heading(sentence)
+        if run_in is not None:
+            title, sentence = run_in
+            target = parent.add(Node("paragraph", title))
         if sentence and not re.fullmatch(r"(?:\\[A-Za-z@]+\*?\s*)+", sentence):
-            parent.add(Node("sentence", sentence))
+            target.add(Node("sentence", sentence))
+
+
+_RUN_IN_OPEN_RE = re.compile(r"\{\s*\\(?:bf|bfseries)(?![A-Za-z@])\s*|\\textbf\s*(?=\{)")
+_RUN_IN_AFTER_RE = re.compile(r"\s*(?:---|--|—|[.:])?\s*")
+
+
+def _split_run_in_heading(sentence: str) -> tuple[str, str] | None:
+    """``{\\bf Results.} We find ...`` -> ``("Results", "We find ...")``.
+
+    A bold phrase that opens a sentence and ends with ``.``/``:`` or a dash
+    (inside or right after the group) is a run-in paragraph heading.
+    """
+
+    opener = _RUN_IN_OPEN_RE.match(sentence)
+    if opener is None:
+        return None
+    if opener.group(0).startswith("{"):
+        group = _read_balanced("{" + sentence[opener.end() :], 0, "{", "}")
+        if group is None:
+            return None
+        title, end = group[0], opener.end() + group[1] - 1
+    else:
+        group = _read_balanced(sentence, opener.end(), "{", "}")
+        if group is None:
+            return None
+        title, end = group
+    after = _RUN_IN_AFTER_RE.match(sentence, end)
+    punctuated = re.search(r"(?:[.:]|---|--|—)\s*$", title) or after.group(0).strip()
+    title = re.sub(r"\s*(?:[.:]|---|--|—)\s*$", "", title).strip()
+    if not punctuated or not title or len(title) > 120 or len(title.split()) > 12:
+        return None
+    return title, sentence[after.end() :].strip()
 
 
 def _split_items(content: str) -> list[str]:

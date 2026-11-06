@@ -117,6 +117,12 @@ class CleanTests(unittest.TestCase):
     def test_whitespace_and_url_tilde(self) -> None:
         self.assertEqual(clean("  a\n\n b~c \\url{http://u.edu/~me}  "), "a b c \\url{http://u.edu/~me}")
 
+    def test_switch_group_braces_removed(self) -> None:
+        self.assertEqual(clean("{\\bf Conflict of Interest}. None."), "Conflict of Interest. None.")
+        self.assertEqual(clean("{\\em et al.} and {{\\bf A} b}"), "et al. and {A b}")
+        # Argument braces stay: subscripts and command arguments.
+        self.assertEqual(clean("$f_{\\rm sed}$ \\footnote{\\bf x}"), "$f_{ sed}$ \\footnote{ x}")
+
     def test_commands_with_letter_suffix_untouched(self) -> None:
         self.assertEqual(clean("\\smallskip\\item \\itemize \\paragraph{P}"), "\\item \\itemize \\paragraph{P}")
 

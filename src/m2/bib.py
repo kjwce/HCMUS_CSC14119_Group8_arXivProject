@@ -102,6 +102,7 @@ def latex_to_text(value: str | None) -> str:
         text = _LETTER_ACCENT_RE.sub(_accent, text)
         text = _SPECIAL_LETTER_RE.sub(lambda match: _SPECIAL_LETTERS[match.group(1)], text)
         text = _ESCAPED_RE.sub(r"\1", text)
+        text = re.sub(r"\\[dt]?frac\s*\{([^{}]*)\}\s*\{([^{}]*)\}", r"\1/\2", text)
         text = _DROPPED_COMMANDS_RE.sub(" ", text)
         text = re.sub(r"\\(?:url|href)\s*\{([^{}]*)\}(?:\s*\{[^{}]*\})?", r"\1", text)
         text = _COMMAND_RE.sub(" ", text)
@@ -229,7 +230,8 @@ def parse_bibtex_authors(value: str | None) -> list[str]:
     return names
 
 
-_INITIALS_RE = re.compile(r"^(?:[A-Z][a-z]?\.?[\s-]*)+$")
+# "I. J." or "IJ" -- not "Ho" in "W. W. Ho", which is a two-letter surname.
+_INITIALS_RE = re.compile(r"^(?:(?:[A-Z][a-z]?\.[\s-]*)+|[A-Z]{1,3})$")
 _FREE_AND_RE = re.compile(r"\s*(?:,\s*and\s+|\band\s+|\s+&\s+|\\&\s*|;\s*)", re.IGNORECASE)
 
 
@@ -263,6 +265,8 @@ def parse_free_authors(text: str) -> list[str]:
         index += 1
     # Keep the period of a final initial ("A. D.") but not a sentence period.
     names = [name[:-1] if re.search(r"[A-Za-z]{2,}\.$", name) else name for name in names]
+    # "K.Weierstrass" -> "K. Weierstrass" ("D.Z. Albert" is unchanged).
+    names = [re.sub(r"\b([A-Z]\.)(?=[A-Z][a-z])", r"\1 ", name) for name in names]
     return [name for name in names if 1 < len(name) <= 80]
 
 
@@ -555,7 +559,8 @@ _BIBINFO_RE = re.compile(r"\\bibinfo\s*\{(\w+)\}\s*\{((?:[^{}]|\{(?:[^{}]|\{[^{}
 _ITALIC_RE = re.compile(
     r"\\(?:emph|textit|textsl)\s*\{((?:[^{}]|\{[^{}]*\})*)\}|\{\\(?:em|it|sl)\s+((?:[^{}]|\{[^{}]*\})*)\}"
 )
-_QUOTED_TITLE_RE = re.compile(r"``(.+?)''|\"(.+?)\"|“(.+?)”", re.DOTALL)
+# ``\"o`` is an umlaut, not a quotation mark.
+_QUOTED_TITLE_RE = re.compile(r"``(.+?)''|(?<!\\)\"(.+?)(?<!\\)\"|“(.+?)”", re.DOTALL)
 _PAREN_YEAR_RE = re.compile(r"\(\s*((?:19|20)\d{2})[a-z]?\s*\)")
 # "Phys. Rev. Lett. \textbf{106}": capitalized words, each ended by "." or a
 # space. Requiring the separator keeps the split unique; the earlier form
@@ -657,6 +662,138 @@ def _authors_end_surname_first(text: str) -> int:
     return -1
 
 
+# "D.Z. Albert", "P. J. S. G. Ferreira", "K.Weierstrass", "J. van der Berg",
+# "E. Schr\"odinger": initials, then a capitalized (possibly accented) surname.
+# Two-letter initials are limited to digraphs, so "Z. Li. Title" ends at "Li".
+_INITIAL = r"(?:Ch|Th|Sh|Zh|Kh|Ph|Gh|Ts|Yu|Ya|Ye|Yo|Ju|[A-Z])\."
+_PARTICLE = r"(?:[Vv]an|[Vv]on|[Dd]er|[Dd]en|[Dd]e|[Dd]el|[Dd]ella|[Dd]a|[Dd]i|[Dd]u|[Ll]a|[Ll]e|dos|das|ter|zu)"
+_SURNAME = (
+    r"(?:" + _PARTICLE + r"\s+)*(?:[A-Z]|\\['`^\"~=.uvHckrbd]|\{)[^\s,;:]*"
+    r"(?:\s+" + _PARTICLE + r"\s+[A-Z][^\s,;:]*)*"  # "L. Beirão da Veiga"
+)
+_INITIALS_NAME_RE = re.compile(r"(?:" + _INITIAL + r"\s*-?\s*)+" + _SURNAME)
+# "P Hästö" (initial without a period) is accepted only for a later name that
+# is directly followed by a separator, so a title such as "A Survey of" is not.
+_BARE_INITIAL_NAME_RE = re.compile(r"[A-Z]\s+" + _SURNAME + r"(?=\s*(?:,|;|&|\\&|\band\b))")
+_NAME_SEPARATOR_RE = re.compile(r"\s*(?:,\s*and\s+|,\s*&\s*|\s+and\s+|\\&\s*|&\s*|[,;]\s*)")
+_ET_AL_RE = re.compile(
+    r"\s*,?\s*(?:\\(?:textit|emph)\s*\{\s*et\s+al\.?\s*\}|\{\\(?:em|it)\s+et\s+al\.?\s*\}|et\s+al\.?|and\s+others)"
+)
+_QUOTE_PAIRS = (("``", ("''", '"', "”")), ('"', ('"', "''")), ("“", ("”", '"', "''")))
+
+
+def _spaced(text: str) -> str:
+    """Same-length copy with LaTeX spacing (``~``, ``\\,``, ``\\ ``) as blanks."""
+
+    # ``\~a`` is an accent, not a non-breaking space.
+    return re.sub(r"(?<!\\)~", " ", text).replace("\\,", "  ").replace("\\ ", "  ")
+
+
+def _name_end(match: re.Match[str]) -> int:
+    """End of a name, without a sentence period ("M.P. Sundqvist. Title")."""
+
+    return match.end() - 1 if re.search(r"[a-z]{2}\.$", match.group(0)) else match.end()
+
+
+_LEAD_YEAR_RE = re.compile(r"[\s,.]*\(?((?:19|20)\d{2})[a-z]?\)?(?![\d/])")
+
+
+def _initials_first_authors(body: str) -> tuple[int, int, int | None] | None:
+    """Find the author block of "I. Surname, J. Other and K. Last, 1988, Title, ...".
+
+    Returns ``(authors_end, title_start, year)``. ``None`` when ``body`` does
+    not start with such a list or the list is not followed by a year, a comma
+    or a formatted title, so the caller can fall back to other heuristics.
+    """
+
+    match = _INITIALS_NAME_RE.match(body, len(body) - len(body.lstrip()))
+    if match is None or not re.search(r"[a-z]", match.group(0)):
+        return None
+    end = _name_end(match)
+    while True:
+        separator = _NAME_SEPARATOR_RE.match(body, end)
+        if separator is None:
+            break
+        name = _INITIALS_NAME_RE.match(body, separator.end()) or _BARE_INITIAL_NAME_RE.match(
+            body, separator.end()
+        )
+        if name is None:
+            break
+        end = _name_end(name)
+    et_al = _ET_AL_RE.match(body, end)
+    if et_al:
+        end = et_al.end()
+    rest = end
+    year = None
+    lead_year = _LEAD_YEAR_RE.match(body, end)
+    if lead_year:
+        year = int(lead_year.group(1))
+        rest = lead_year.end()
+    after = body[rest:].lstrip(" \t\n,.:")
+    if year is None and not body[end:].lstrip(" \t\n").startswith((",", ".", ":", "\\emph", "\\textit", "{")):
+        return None
+    return end, len(body) - len(after), year
+
+
+def _title_venue_after_authors(rest: str) -> tuple[str | None, str | None]:
+    """Split "Title, \\textit{Venue} 12, 34" (or an italic title) after the authors."""
+
+    stripped = rest.lstrip()
+    in_venue = re.match(r"[Ii]n:?\s+", stripped)
+    if in_venue:
+        # No title: "A. Hegyi, B. De Schutter, in: B.S. Kerner (Ed.), Book, ...".
+        return None, (re.split(r",|\(", stripped[in_venue.end() :])[0].strip() or None)
+    for opener, closers in _QUOTE_PAIRS:
+        if stripped.startswith(opener):
+            # ``Title,'' \textit{Venue} -- also the mixed ``Title," form.
+            quoted = stripped[len(opener) :]
+            close = min((index for index in map(quoted.find, closers) if index > 0), default=-1)
+            if close > 0:
+                after = quoted[close:].lstrip("'\"”").strip(" \t\n,.")
+                italic = _ITALIC_RE.match(after)
+                venue = (italic.group(1) or italic.group(2)) if italic else re.split(r"\\textbf|\{\\bf|\(|,|\d", after)[0]
+                return quoted[:close].strip(" ,"), (venue.strip() or None)
+            break
+    italic = _ITALIC_RE.search(rest)
+    if italic:
+        before = rest[: italic.start()]
+        before = re.sub(r"(?:,?\s*\b(?:19|20)\d{2}[a-z]?)?[\s,.;:]*(?:\b[Ii]n:?)?[\s,.;:]*$", "", before)
+        before = before.strip(" \t\n,.;:")
+        venue = italic.group(1) or italic.group(2)
+        if len(latex_to_text(before).split()) >= 2:
+            # "Direct construction of superoscillations, IEEE \textit{Trans. ...}"
+            pieces = before.rsplit(",", 1)
+            if len(pieces) == 2 and 0 < len(pieces[1].split()) <= 2 and not re.search(r"[a-z]{4}", pieces[1]):
+                return pieces[0], f"{pieces[1].strip()} {venue}"
+            return before, venue
+        if re.match(r"\s*(?:\\textbf|\{\\bf|\d)", rest[italic.end() :]):
+            # Physics style without a title: "\textit{Small} \textbf{15}, 1904396".
+            return None, venue
+        after = rest[italic.end() :].strip(" \t\n,.")
+        return venue, (re.split(r"\\textbf|\{\\bf|\(|,|\d", after)[0].strip() or None)
+    if _ABBREVIATED_VENUE_RE.match(rest):
+        # Physics style without a title: "Phys. Rev. Lett. \textbf{106}, 1 (2011)".
+        return None, re.split(r"\\textbf|\d", rest)[0]
+    cuts =[cut for cut in (_top_level_period_cut(rest),) if cut > 0]
+    marker = re.search(r",\s*(?:\[|[Ii]n:?\s)", rest)
+    if marker:
+        cuts.append(marker.start())
+    # "Title, Phys. Rev. X \textbf{14}": the venue starts after a comma.
+    for comma in re.finditer(r",\s*", rest):
+        if _ABBREVIATED_VENUE_RE.match(rest, comma.end()):
+            cuts.append(comma.start())
+            break
+    if not cuts:
+        comma = rest.find(",")
+        cuts.append(comma if comma > 0 else len(rest))
+    cut = min(cuts)
+    title, remainder = rest[:cut], rest[cut:]
+    venue_match = re.search(r"\b[Ii]n:?\s+([^,(]+)", remainder)
+    venue = venue_match.group(1) if venue_match else re.split(r"\\textbf|\{\\bf|\(|,|\d", remainder.lstrip(" ,.;"))[0]
+    venue = venue.strip()
+    return title or None, (venue if venue and not venue.startswith(("[", "http")) else None)
+
+
 def _parse_bibitem_body(key: str, label: str, body: str, arxiv_id: str | None, source: str) -> Entry:
     body = _DROPPED_COMMANDS_RE.sub(lambda match: " " if "newblock" not in match.group(0) else match.group(0), body)
     body = body.strip()
@@ -742,8 +879,19 @@ def _parse_bibitem_body(key: str, label: str, body: str, arxiv_id: str | None, s
                 venue = (italic.group(1) or italic.group(2)) if italic else rest.strip(" ,.").split(",")[0]
             else:
                 italic = _ITALIC_RE.search(body)
-                surname_first = re.match(r"\s*[A-Z][^\s,]+(?:\s[A-Z][^\s,]+)?,\s*[A-Z][a-z]?\.", latex_to_text(body))
-                if surname_first:
+                # "Smith, A." -- the surname must not itself be an initial, or
+                # "Y. Aharonov, F. Colombo" would be read surname-first.
+                surname_first = re.match(
+                    r"\s*[A-Z][^\s,.]+(?:\s[A-Z][^\s,.]+)?,\s*[A-Z][a-z]?\.", latex_to_text(body)
+                )
+                spaced = _spaced(body)
+                initials_first = None if surname_first else _initials_first_authors(spaced)
+                if initials_first is not None:
+                    end, title_start, lead_year = initials_first
+                    authors_text = body[:end]
+                    title, venue = _title_venue_after_authors(spaced[title_start:])
+                    year = lead_year or year
+                elif surname_first:
                     end = _authors_end_surname_first(body)
                     authors_text = body[:end] if end > 0 else body.split(".")[0]
                     rest = body[end:] if end > 0 else ""

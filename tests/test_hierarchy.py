@@ -123,6 +123,27 @@ class HierarchyTests(unittest.TestCase):
         self.assertIn("Proof sentence.", contents)
         self.assertFalse(any("\\begin{proof}" in content or "\\end{proof}" in content for content in contents))
 
+    def test_run_in_bold_heading_becomes_paragraph(self) -> None:
+        latex = r"""
+        \begin{document}
+        \section{Model}
+        Intro sentence.
+        {\bf Critical Regime ($R_N \to C > 0$):} The system sits on a knife-edge. It tips.
+        \begin{itemize}\item {\bf Impact}: Pressure changes.\end{itemize}
+        \textbf{Note} that bold words inside a sentence stay.
+        \end{document}
+        """
+        root = build_tree(latex, split_sentences)
+        section = root.children[0]
+        self.assertEqual([child.kind for child in section.children], ["sentence", "paragraph", "list", "sentence"])
+        paragraph = section.children[1]
+        self.assertEqual(paragraph.content, r"Critical Regime ($R_N \to C > 0$)")
+        self.assertEqual(
+            [child.content for child in paragraph.children], ["The system sits on a knife-edge.", "It tips."]
+        )
+        item = section.children[2].children[0]
+        self.assertEqual((item.children[0].kind, item.children[0].content), ("paragraph", "Impact"))
+
 
 if __name__ == "__main__":
     unittest.main()
