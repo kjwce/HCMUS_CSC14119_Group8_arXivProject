@@ -121,6 +121,38 @@ class BibitemTests(unittest.TestCase):
         self.assertEqual(entry.title, "Geometry of cohomology support loci")
         self.assertEqual(entry.year, 1997)
 
+    def test_initials_first_with_year_after_authors(self) -> None:
+        # Regression: 2603-05580 leaked the last author into the title.
+        entry = item(
+            "\\bibitem{AAV} Y. Aharonov, D.Z. Albert, L. Vaidmann, 1988, How the result of a measurement "
+            "can turn out to be 100, \\textit{Phys. Rev. Lett.} \\textbf{60} (1988), 1351-1354."
+        )
+        self.assertEqual(entry.authors, ["Y. Aharonov", "D.Z. Albert", "L. Vaidmann"])
+        self.assertEqual(entry.title, "How the result of a measurement can turn out to be 100")
+        self.assertEqual((entry.journal, entry.year), ("Phys. Rev. Lett", 1988))
+        entry = item(
+            "\\bibitem{c} Y. Aharonov, I. Sabadini, D. C. Struppa, and J. Tollaksen, 2017,\n"
+            "The Mathematics of Superoscillations,\n\\textit{Memoirs of the AMS}, Vol. 247."
+        )
+        self.assertEqual(entry.authors, ["Y. Aharonov", "I. Sabadini", "D. C. Struppa", "J. Tollaksen"])
+        self.assertEqual(entry.title, "The Mathematics of Superoscillations")
+
+    def test_initials_first_without_commas_or_italic_venue(self) -> None:
+        lee = item(
+            "\\bibitem{Lee} D. G. Lee and P. J. S. G. Ferreira 2014 Direct construction of superoscillations, "
+            "IEEE \\textit{ Trans. Signal Process.} 62, 3125-34."
+        )
+        self.assertEqual(lee.authors, ["D. G. Lee", "P. J. S. G. Ferreira"])
+        self.assertEqual((lee.title, lee.journal), ("Direct construction of superoscillations", "IEEE Trans. Signal Process"))
+        weier = item(
+            "\\bibitem{w} K.Weierstrass, \\\"Uber continuirliche Functionen eines reellen Arguments, "
+            "[On continuous functions], in: K\\\"oniglich Preu\\ss ische Akademie der Wissenschaften, "
+            "Mathematische Werke (Berlin: Mayer \\& Mueller, 1895), vol. 2, pages 71--74."
+        )
+        self.assertEqual(weier.authors, ["K. Weierstrass"])
+        self.assertEqual(weier.title, "Über continuirliche Functionen eines reellen Arguments")
+        self.assertEqual(weier.journal, "Königlich Preußische Akademie der Wissenschaften")
+
     def test_physics_style_without_title(self) -> None:
         entry = item("\\bibitem{EM} M. R. Evans and S. N. Majumdar, Phys. Rev. Lett. \\textbf{106}, 160601 (2011).")
         self.assertEqual(entry.authors, ["M. R. Evans", "S. N. Majumdar"])

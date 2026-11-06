@@ -5,7 +5,9 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from src.m2.run_m2 import PARSER_SCHEMA_VERSION, _write_paper_stats_jsonl, process_paper
+from src.m2 import normalize
+from src.m2.models import Node
+from src.m2.run_m2 import PARSER_SCHEMA_VERSION, _normalize_tree, _write_paper_stats_jsonl, process_paper
 
 
 class RunnerIntegrationTests(unittest.TestCase):
@@ -82,6 +84,16 @@ A cited sentence \cite{paper2020}.
         self.assertFalse(any("Must not leak" in row["content"] or "Hidden Author" in row["content"] for row in elements))
         self.assertTrue(any(row["kind"] == "formula" and "\\begin{aligned}" in row["content"] for row in elements))
         self.assertTrue(any(row["kind"] == "figure" and "deluxetable" in row["content"] for row in elements))
+
+
+    def test_sentences_empty_after_cleanup_are_dropped(self) -> None:
+        root = Node("document", "Document")
+        section = root.add(Node("section", "Intro"))
+        section.add(Node("sentence", r"\label{sec:intro}"))
+        section.add(Node("sentence", "Kept sentence."))
+        section.add(Node("sentence", r"\vspace{2mm} "))
+        _normalize_tree(root, normalize, {})
+        self.assertEqual([child.content for child in section.children], ["Kept sentence."])
 
 
 if __name__ == "__main__":

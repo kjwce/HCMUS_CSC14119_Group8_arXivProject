@@ -19,7 +19,7 @@ from .hierarchy import build_tree
 from .models import Node
 from .store import PublicationStore, normalize_arxiv_id
 
-PARSER_SCHEMA_VERSION = 2
+PARSER_SCHEMA_VERSION = 3
 
 
 def _version_number(value: str | int) -> int:
@@ -178,6 +178,11 @@ def _normalize_tree(node: Node, normalize_module: Any, rename_map: dict[str, str
     node.content = content
     for child in node.children:
         _normalize_tree(child, normalize_module, rename_map)
+    # A sentence holding only removed markup (``\label{..}``, ``\vspace{..}``)
+    # is empty after cleanup and carries no content.
+    node.children = [
+        child for child in node.children if child.kind != "sentence" or child.content.strip()
+    ]
 
 
 def _rename_map_for_version(rename_maps: Any, version: int) -> dict[str, str]:
