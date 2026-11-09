@@ -544,7 +544,36 @@ def run(args: argparse.Namespace) -> int:
         for error in errors:
             handle.write(json.dumps(error, ensure_ascii=False) + "\n")
     print(json.dumps(summary, ensure_ascii=False, indent=2))
+    if args.archive:
+        archive = archive_output(output_root, None if args.archive == "auto" else Path(args.archive))
+        print(f"Archive written: {archive} ({archive.stat().st_size / 1e6:.1f} MB)")
     return 1 if errors else 0
+
+
+def archive_output(output_root: Path, archive_path: Path | None = None) -> Path:
+    """Pack ``output_root`` into ``<output>.tar.gz`` for sharing (Drive, M3).
+
+    The folder itself is kept: its ``_SUCCESS`` markers are what lets a later
+    run resume. The archive is written to a temporary name first so an
+    interrupted run never leaves a truncated ``.tar.gz`` behind.
+    """
+
+    import tarfile
+
+    output_root = output_root.resolve()
+    if archive_path is None:
+        archive_path = output_root.parent / f"{output_root.name}.tar.gz"
+    archive_path = archive_path.resolve()
+    if output_root in archive_path.parents:
+        raise ValueError(f"Archive must be outside the output directory: {archive_path}")
+    archive_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = archive_path.with_name(archive_path.name + ".part")
+    # Level 6 (as ``tar -czf``/gzip default): about 2x faster than tarfile's
+    # default 9 on M2 JSONL output for an archive only ~2% larger.
+    with tarfile.open(temporary, "w:gz", compresslevel=6) as tar:
+        tar.add(output_root, arcname=output_root.name)
+    os.replace(temporary, archive_path)
+    return archive_path
 
 
 def build_argument_parser() -> argparse.ArgumentParser:
@@ -554,6 +583,15 @@ def build_argument_parser() -> argparse.ArgumentParser:
     parser.add_argument("--workers", type=int, default=None)
     parser.add_argument("--limit", type=int, default=None, help="Process the first N papers")
     parser.add_argument("--force", action="store_true", help="Reprocess completed papers")
+    parser.add_argument(
+        "--archive",
+        nargs="?",
+        const="auto",
+        default=None,
+        metavar="PATH",
+        help="After the run, also pack the output folder into a .tar.gz "
+        "(default: <output>.tar.gz next to the output folder)",
+    )
     parser.add_argument(
         "--inventory",
         action="store_true",

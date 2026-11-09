@@ -7,7 +7,7 @@ from pathlib import Path
 
 from src.m2 import normalize
 from src.m2.models import Node
-from src.m2.run_m2 import PARSER_SCHEMA_VERSION, _normalize_tree, _write_paper_stats_jsonl, process_paper
+from src.m2.run_m2 import PARSER_SCHEMA_VERSION, _normalize_tree, archive_output, _write_paper_stats_jsonl, process_paper
 
 
 class RunnerIntegrationTests(unittest.TestCase):
@@ -94,6 +94,27 @@ A cited sentence \cite{paper2020}.
         section.add(Node("sentence", r"\vspace{2mm} "))
         _normalize_tree(root, normalize, {})
         self.assertEqual([child.content for child in section.children], ["Kept sentence."])
+
+    def test_archive_output_keeps_folder(self) -> None:
+        import tarfile
+
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "m2_out"
+            (output / "2603-00001").mkdir(parents=True)
+            (output / "2603-00001" / "bibtex.jsonl").write_text("{}\n", encoding="utf-8")
+            (output / "m2_stats.json").write_text("{}", encoding="utf-8")
+
+            archive = archive_output(output)
+
+            self.assertEqual(archive, Path(tmp).resolve() / "m2_out.tar.gz")
+            self.assertTrue((output / "2603-00001" / "bibtex.jsonl").is_file())
+            self.assertFalse(archive.with_name("m2_out.tar.gz.part").exists())
+            with tarfile.open(archive) as tar:
+                names = set(tar.getnames())
+            self.assertIn("m2_out/2603-00001/bibtex.jsonl", names)
+            self.assertIn("m2_out/m2_stats.json", names)
+            with self.assertRaises(ValueError):
+                archive_output(output, output / "inside.tar.gz")
 
 
 if __name__ == "__main__":

@@ -66,6 +66,11 @@ python -m src.m2.run_m2 `
 Use `--limit 20` for a sample run. A `_SUCCESS` marker makes later runs skip
 completed publications; pass `--force` to rebuild them.
 
+Add `--archive` to also pack the output folder into `m2_processed.tar.gz`
+(next to the folder) when the run ends, ready to upload to Drive. Use
+`--archive "D:\path\to\m2_all.tar.gz"` to choose the file name. The folder is
+kept so a later run can still resume from it.
+
 The corpus-level `m2_stats.json` records paper success, version coverage,
 deduplication counts, unresolved citation keys, running time, RAM and output
 size. `paper_stats.jsonl` collects the complete `stats.json` record from every
