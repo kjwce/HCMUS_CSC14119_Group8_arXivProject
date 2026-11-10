@@ -95,3 +95,111 @@ provide the corpus summary, all per-paper diagnostics, and failures respectively
 
 Raw data, logs, archives, secrets, and generated outputs are excluded by
 `.gitignore` and must not be pushed to GitHub.
+
+## Milestone 3 — Reference Matching
+
+> Status: skeleton. Sections marked `TODO (owner)` are filled in as the code and
+> results land.
+
+Goal: for every BibTeX entry of a paper (M2 `bibtex` table), find the crawled
+reference of the same paper (M1 `references` table, arXiv-keyed only) that it
+cites, or decide that none matches. Each entry has at most one correct
+reference. The system ranks candidates and is evaluated with MRR@5.
+
+### Pipeline
+
+```text
+bibtex (M2) ──┐
+              ├─► 1. Cleaning ─► 2. Labelling ─► 3. Features ─► 4. Model ─► 5. MRR@5
+references(M1)┘                                                       │
+                                                                      ▼
+                                              predictions table + Hugging Face dataset
+```
+
+1. **Cleaning**: TODO (Hưng) — title/author/year normalisation, arXiv ID and DOI
+   extraction from BibTeX fields.
+2. **Labelling**: manual labels for 25 papers plus automatic labels from a
+   rule-based matcher (see *Label format*).
+3. **Features**: one feature vector per (entry, reference) pair of the same paper
+   (see *Features*).
+4. **Model**: TODO (Ngọc) — problem framing and model choice.
+5. **Evaluation**: top-5 candidates per labelled entry, MRR@5 on the test set.
+
+Whether LLMs or pretrained models are used: TODO (team decision; the course
+grades such groups separately).
+
+### How to run Milestone 3
+
+TODO (Hưng, Ngọc): commands for each step, inputs and outputs.
+
+```powershell
+# python -m src.m3.<module> --input ... --output ...
+```
+
+### Label format
+
+TODO (Đức): review and complete.
+
+Manual labels are stored per member range in `rX_manual_entries.csv`
+(UTF-8 CSV, one row per BibTeX entry). Candidate references for lookup are in
+`rX_manual_references.csv`.
+
+| Column | Meaning |
+|---|---|
+| `range`, `arxiv_id`, `citation_key` | Identify the entry; `arxiv_id` uses the dotted form `2605.30939` |
+| `bib_title`, `bib_authors`, `bib_year`, `bib_doi`, `bib_journal`, `bib_url` | Entry fields copied from the M2 `bibtex` table (authors joined by ` \| `) |
+| `match_status` | `matched` or `no_match` |
+| `groundtruth_arxiv_id` | The `ref_arxiv_id` of the true reference when `matched`, empty otherwise |
+| `annotator_notes` | Free text; `CẦN ĐỨC KIỂM TRA` marks rows awaiting review |
+
+Labelling rules:
+
+- Candidates come only from the references of the same paper.
+- Evidence, strongest first: shared arXiv ID or DOI, same title (ignoring case,
+  punctuation and LaTeX), matching authors, year (±1 between preprint and
+  published version), venue.
+- `no_match` is a valid label: books, websites, works not on arXiv, or works
+  Semantic Scholar did not return.
+- Each manually labelled paper has at least the first 20 entries labelled in
+  their original order, so easy entries are not cherry-picked.
+
+Automatic labels: TODO (Hưng) — matcher rules, output file and format.
+
+### Labelling statistics
+
+| Pool | Papers | Labelled entries | matched | no_match |
+|---|---|---|---|---|
+| Manual, range 1 | 5 | 193 | 135 | 58 |
+| Manual, ranges 2–5 | TODO | TODO | TODO | TODO |
+| Automatic | TODO (≥ 2,498) | TODO | TODO | TODO |
+
+### Data split
+
+Split by paper with a fixed seed: test = 5 manual + 5 automatic papers,
+validation = 5 manual + 5 automatic papers, train = all remaining labelled
+papers. TODO (Hưng): seed, paper lists and entry counts per split.
+
+### Features
+
+TODO (Kiệt, with Ngọc's plots): one row per feature, each backed by a plot or
+number from the labelled data.
+
+| Feature | Idea | Evidence from the data |
+|---|---|---|
+| TODO | TODO | TODO |
+
+### Results and analysis
+
+TODO (Kiệt): MRR@5 on test (manual vs automatic papers), validation score,
+feature importance, error analysis.
+
+Observation from manual labelling (range 1): several entries labelled
+`no_match` carry an arXiv link in the BibTeX itself (for example `silva2022` →
+2206.02826, `healthllm` → 2401.06866), but that paper is missing from the
+Semantic Scholar references. These are crawl-side misses rather than model
+errors, and they bound the reachable MRR@5.
+
+### Hugging Face dataset
+
+TODO (Vân Anh, Hưng): dataset link and the six configs (`papers`,
+`references`, `elements`, `hierarchy`, `bibtex`, `predictions`).
