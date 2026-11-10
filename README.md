@@ -203,3 +203,13 @@ errors, and they bound the reachable MRR@5.
 
 TODO (Vân Anh, Hưng): dataset link and the six configs (`papers`,
 `references`, `elements`, `hierarchy`, `bibtex`, `predictions`).
+
+Hugging Face dataset link: [hcmus-intro-ds-group8/m3-reference-matching](https://huggingface.co/datasets/hcmus-intro-ds-group8/m3-reference-matching)
+
+The dataset includes the following 6 configs:
+- `papers`
+- `references`
+- `elements`
+- `hierarchy`
+- `bibtex`
+- `predictions`
