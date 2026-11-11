@@ -211,6 +211,29 @@ from the corresponding reference file, or set `match_status` to `no_match` and
 leave the ground-truth field empty. Candidate references never cross publication
 boundaries.
 
+### Manual label format and evidence
+
+The manual files are UTF-8 CSVs named `rX_manual_entries.csv`; the companion
+`rX_manual_references.csv` lists candidates from the same publication.
+
+| Column | Meaning |
+| --- | --- |
+| `range`, `arxiv_id`, `citation_key` | Entry identity; publication arXiv ID uses its canonical dotted form. |
+| `bib_title`, `bib_authors`, `bib_year`, `bib_doi`, `bib_journal`, `bib_url` | M2 entry metadata; authors are joined with a vertical bar. |
+| `match_status` | `matched` or `no_match`. |
+| `groundtruth_arxiv_id` | Reference ID from the same paper when matched; empty otherwise. |
+| `annotator_notes` | Evidence, ambiguity or a note requesting human review. |
+
+Compare identifiers first, then title, authors, year and venue. A year difference
+can reflect preprint versus publication dates and should be checked rather than
+rejected automatically. Label the supplied entries consistently, without selecting
+only easy matches. Preserve identifiers as text when using spreadsheet software.
+
+An entry may contain an arXiv link even though that work is absent from its M1
+Semantic Scholar reference candidates. In that case `no_match` refers to the
+available candidate pool, not to whether the cited work exists on arXiv. Such
+crawl-side omissions limit attainable all-entry MRR@5 independently of ranking.
+
 ### Import reviewed labels and prepare the modelling handoff
 
 After the five reviewed range CSVs are available, validate them against M1/M2,
