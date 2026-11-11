@@ -14,6 +14,11 @@ processed/
 *.tar
 *.tar.gz
 *.zip
+*.parquet
+*.joblib
+*.pkl
+labels/
+partitions/
 s2_api_key.txt
 *.key
 
