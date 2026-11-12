@@ -3,9 +3,13 @@
 This repository keeps the source code of Milestones 1, 2, and 3 separately. Raw and
 processed corpora stay outside GitHub.
 
-Published dataset: [Group 8 arXiv corpus on Hugging Face](https://huggingface.co/datasets/hngx1016/HCMUS_CSC14119_Group8_arxiv).
+Shared group dataset: [Group 8 arXiv corpus on Hugging Face](https://huggingface.co/datasets/hngx1016/HCMUS_CSC14119_Group8_arxiv).
 The six configurations contain the corpus tables and matching predictions;
 the dataset card includes the model selection and evaluation reports.
+For the Moodle data submission, each student uploads the data belonging to
+their assigned range as a separate public dataset on their own personal account,
+as instructed by the lab. The 25,000-paper aggregate is the shared reference
+copy; use **Step 4: split by original assignment** before individual uploads.
 
 ## Start here
 
@@ -19,7 +23,7 @@ data locations. No path in this guide requires a particular member's computer.
 | M2: parse | Extracted M1 `raw/` | Per-paper elements, hierarchy, BibTeX and parser statistics |
 | M3: prepare | Full M1/M2 corpus, five range manifests and reviewed labels | Frozen labels, publication partitions and flat modelling inputs |
 | M3: model | Frozen modelling handoff | Features, selected model, metrics, top-five predictions and plots |
-| M3: publish | Full corpus plus actual model predictions | Six validated Parquet configurations on Hugging Face |
+| M3: publish | Full corpus, actual predictions and original range manifests | Five individual datasets, each with six configurations, for personal Hugging Face uploads |
 
 For a fresh full run, follow the M1, M2, matching-data, modelling and Parquet
 sections **in that order**. If M1/M2 are already complete, reuse those outputs;
@@ -56,6 +60,7 @@ experiment and may yield different results.
 - `src/m3/train_model.py`: classical model fitting and validation selection.
 - `src/m3/evaluate.py`, `src/m3/prediction.py`: MRR evaluation and top-five ranking.
 - `src/m3/export_parquet.py`: six-table export, validation and dataset card.
+- `src/m3/split_dataset.py`: exact manifest-based individual subsets and upload ZIPs.
 - `tests/`: unit and integration-contract tests for the M1-M3 modules.
 
 ## Environment
@@ -86,7 +91,7 @@ python -m unittest discover -s tests -v
 ```
 
 The equivalent shorter command is `python -m pytest -q`. The integrated code
-passed 97 tests when the current workflow was checked.
+passed 100 tests when the current workflow was checked.
 
 ## Run Milestone 1
 
@@ -511,6 +516,10 @@ API references: [SGDClassifier](https://scikit-learn.org/stable/modules/generate
 
 ## Export the final Hugging Face Parquet dataset
 
+Steps 1-3 construct and validate the shared aggregate. Steps 4-5 prepare the
+individual submissions. Reuse the completed aggregate if it is already present;
+splitting its tables does not require crawling, parsing or training again.
+
 The schemas in `src/m3/parquet_schema.py` follow the official
 [M1](https://hcmus-cs-ta.github.io/lab-book/intro-ds/statement/crawling/),
 [M2](https://hcmus-cs-ta.github.io/lab-book/intro-ds/statement/parsing/), and
@@ -617,26 +626,67 @@ local folder has `data/predictions/`, `_FINAL_DATASET_SUCCESS`, the dataset card
 the three model reports and the other five corpus tables. These commands only
 prepare local files; upload is separate.
 
-### Step 4: publish or read the dataset
+### Step 4: split by original assignment
+
+Use the five original M1 manifests. The command checks that they are disjoint,
+each contains 5,000 assigned papers and their union exactly matches `papers`.
+Choose a new output folder:
+
+```powershell
+python -m src.m3.split_dataset `
+  --dataset "D:\m3_work\hf_dataset_v1" `
+  --range-manifest "r1=D:\path\to\r1\manifest\papers.jsonl" `
+  --range-manifest "r2=D:\path\to\r2\manifest\papers.jsonl" `
+  --range-manifest "r3=D:\path\to\r3\manifest\papers.jsonl" `
+  --range-manifest "r4=D:\path\to\r4\manifest\papers.jsonl" `
+  --range-manifest "r5=D:\path\to\r5\manifest\papers.jsonl" `
+  --output "D:\m3_work\hf_datasets_by_range_v1"
+```
+
+The result has `range_1_dataset/` through `range_5_dataset/`, five ZIPs under
+`packages/`, a Vietnamese handoff guide and `split_report.json`. Each dataset
+contains six explicit schemas, a Hub-ready card, the exact assigned ID list,
+and range-specific export/provenance reports. Each ZIP contains one dataset
+folder plus its upload instructions. Check `_SPLIT_SUCCESS` before handing off.
+
+Every table is filtered on the citing/publication `arxiv_id`, not the cited
+`ref_arxiv_id`. References pointing into another member's range remain valid
+candidates of their citing publication and must be retained. The splitter
+compares every output row value against an independent filter of the source,
+rechecks keys, hierarchy and candidate relationships, verifies ZIP integrity,
+and confirms that the aggregate source files remain unchanged.
+
+No model, label, candidate ranking or partition is changed. The shared model
+split was drawn across the whole labelled pool; individual range subsets may
+have unequal Validation/Test counts, including a missing partition. Keep those
+assignments unchanged when preparing storage subsets.
+
+### Step 5: upload each member's dataset
 
 The group's completed dataset is already published at
 [hngx1016/HCMUS_CSC14119_Group8_arxiv](https://huggingface.co/datasets/hngx1016/HCMUS_CSC14119_Group8_arxiv).
-Only a maintainer with write access needs the following upload step when
-publishing a reviewed update. Install the optional Hub CLI and authenticate
-locally; do not put access tokens into README, source files or chat.
+That is the aggregate reference copy. Each member extracts their assigned ZIP,
+creates a **Public** dataset on their **personal** Hugging Face account, uploads
+the contents with `README.md` and `data/` at the repository root, then submits
+their personal public dataset link on Moodle. Do not upload the ZIP itself or
+nest the dataset folder one level below the repository root.
+
+For CLI upload, install the optional Hub CLI and authenticate locally. Replace
+`YOUR_USERNAME/YOUR_RANGE_DATASET` with your own repository and the example
+`range_4_dataset` path with your assigned folder. Do not put tokens into README,
+source files or chat.
 
 ```powershell
 python -m pip install huggingface_hub
 hf auth login
-hf upload hngx1016/HCMUS_CSC14119_Group8_arxiv "D:\m3_work\hf_dataset_v1" . `
+hf upload YOUR_USERNAME/YOUR_RANGE_DATASET "D:\m3_work\hf_datasets_by_range_v1\range_4_dataset" . `
   --repo-type dataset `
   --include "data/*/*.parquet" `
   --include "README.md" `
   --include "schema.json" `
   --include "export_report.json" `
-  --include "matching_metrics.json" `
-  --include "model_selection.json" `
-  --include "model_training_report.json"
+  --include "range_report.json" `
+  --include "assigned_papers.jsonl"
 ```
 
 The upload includes the six tables and their documentation; local completion
@@ -651,7 +701,8 @@ The Hub split named `train` in each configuration is a storage convention for
 that whole table. The actual matching split is the `predictions.partition`
 column. Do not confuse these two meanings.
 
-To read the public dataset without downloading all tables at once:
+To inspect the shared reference dataset without downloading all tables at once
+(replace the repository ID to inspect an individual upload):
 
 ```powershell
 python -m pip install datasets
@@ -672,7 +723,8 @@ through the library independently of the browser Viewer service.
 ## Reported experiment
 
 These numbers describe the frozen reviewed handoff and completed model run
-published with this dataset. They are observations, not promises for new data.
+published with the shared aggregate dataset. They are **group-level** results,
+not metrics for an individual range. They are observations, not promises for new data.
 
 ### Label pools and partitions
 
@@ -740,7 +792,7 @@ distribution plots, validation comparisons and the Test error-case file. An
 empty Test error-case file means no matched-entry top-one errors were found;
 it does not certify missing-reference labels.
 
-### Published table sizes
+### Shared corpus table sizes
 
 | Configuration | Rows |
 | --- | ---: |
