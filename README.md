@@ -60,6 +60,7 @@ experiment and may yield different results.
 - `src/m3/train_model.py`: classical model fitting and validation selection.
 - `src/m3/evaluate.py`, `src/m3/prediction.py`: MRR evaluation and top-five ranking.
 - `src/m3/export_parquet.py`: six-table export, validation and dataset card.
+- `src/m3/feature_evidence.py`: feature evidence on reviewed labels, no-match causes and MRR@5 ceiling.
 - `src/m3/split_dataset.py`: exact manifest-based individual subsets and upload ZIPs.
 - `tests/`: unit and integration-contract tests for the M1-M3 modules.
 
@@ -448,6 +449,94 @@ The training command generates distribution plots covering all 43 features from
 Train pairs (`plots/feature_distributions_*.png`). These plots support analysis
 of how match and nonmatch pairs differ; they are not evidence of causation.
 
+### Feature evidence on reviewed labels
+
+The Train plots are dominated by automatic labels, which the matcher derives
+partly from title similarity. To check that the features are not merely
+reproducing that heuristic, `src/m3/feature_evidence.py` recomputes the same
+features with `build_pairs` on **all 25 reviewed manual publications** (869
+entries, 21,823 pairs, 583 true pairs) and, for comparison, on 150 automatic
+Train publications sampled with seed 14119 (185,352 pairs, 3,088 true pairs).
+TF-IDF is fitted on the Train publications of that sample only.
+
+```powershell
+python -m src.m3.feature_evidence `
+  --dataset "D:\m3_work\hf_dataset_v1" `
+  --manual "D:\m3_work\manual_csv" `
+  --output "D:\m3_work\feature_evidence.json"
+```
+
+*AUC* is the single-feature ROC-AUC for separating true from false pairs;
+for features where lower means "more likely a match" (↓) it is reported as
+1 − AUC. *Unique top-1* is the share of matched manual entries whose true
+reference has the strictly highest value of that one feature among the
+paper's candidates. Medians are on the manual pairs.
+
+| Group | Feature | Median true / false | AUC manual | AUC automatic | Unique top-1 (manual) |
+| --- | --- | ---: | ---: | ---: | ---: |
+| Title | `title_ratio` | 1.000 / 0.395 | 1.000 | 0.999 | 100.0% |
+| Title | `title_jaccard` | 1.000 / 0.000 | 1.000 | 0.999 | 100.0% |
+| Title | `tfidf_cos` | 0.628 / 0.057 | 0.998 | 0.997 | 100.0% |
+| Title | `tfidf_cos_title` | 1.000 / 0.059 | 1.000 | 0.999 | — |
+| Title | `blob_partial` | 1.000 / 0.455 | 1.000 | 0.999 | 98.5% |
+| Title | `title_contain` | 1.000 / 0.000 | 1.000 | 0.999 | 98.1% |
+| Title | `title_token_set` | 1.000 / 0.426 | 0.999 | 0.998 | 97.4% |
+| Title | `title_partial` | 1.000 / 0.455 | 0.999 | 0.999 | 97.4% |
+| Authors | `auth_jaccard` | 1.000 / 0.000 | 0.995 | 0.989 | 93.7% |
+| Authors | `auth_hit` | 1.000 / 0.000 | 0.993 | 0.986 | 87.1% |
+| Authors | `auth_first` | 1 / 0 | 0.976 | 0.968 | 48.9% |
+| Authors | `auth_cnt_diff` ↓ | 0 / 2 | 0.890 | 0.852 | — |
+| Year | `year_diff` ↓ | 0 / 3 | 0.869 | 0.868 | — |
+| Year | `year_eq` | 1 / 0 | 0.764 | 0.749 | 8.9% |
+| Identifier | `id_hit` | 0 / 0 | 0.680 | 0.674 | 36.0% |
+| Context | `journal_vs_title_ratio` | 0.301 / 0.289 | 0.534 | 0.560 | — |
+| Context | `year_in_blob` | 0 / 0 | 0.531 | 0.538 | — |
+| Context | `len_ratio` ↓ | 0.404 / 0.416 | 0.528 | 0.539 | — |
+| Context | `n_refs` | 26 / 27 | 0.435 | 0.386 | — |
+| Ranking | `title_token_set_rank` ↓ | 1 / 13 | 0.993 | 0.989 | — |
+| Ranking | `blob_partial_z` | 4.37 / −0.26 | 0.999 | 0.997 | — |
+| Ranking | `auth_hit_gap` | 0.00 / −1.00 | 0.909 | 0.881 | — |
+| Baseline | `combo_score` | 0.886 / 0.210 | 1.000 | 1.000 | 100.0% |
+
+What the numbers show:
+
+- **Titles carry almost all the signal, on human labels as well.** Every title
+  feature reaches AUC ≥ 0.998 on the reviewed manual pairs, the same level as on
+  automatic pairs. The near-perfect separation in the Train plots is therefore
+  not only an artefact of title-based silver labels. (The manual labels were
+  AI-assisted and then reviewed by people, so they are not a fully independent
+  benchmark.)
+- **Several title measures are kept because each fails differently.**
+  Token-set and partial ratios saturate at 1.0 when one title is contained in
+  the other. That is useful for shortened titles but misleading for short
+  generic ones: 10 of the 286 manual no-match entries have a candidate with
+  `title_token_set` ≥ 0.9, for example the textbook *Partial differential
+  equations* (Evans, 2010) against *High-precision quantum algorithms for
+  partial differential equations* (2020), or *Variational quantum algorithms:
+  fundamental concepts, applications and challenges* (Qi et al., 2024) against
+  *Variational quantum algorithms* (Cerezo et al., 2020). `title_ratio`,
+  `title_jaccard` and TF-IDF penalise the extra words, and authors and year
+  disagree.
+- **Authors are the main independent evidence.** `auth_jaccard` alone ranks
+  the true reference first for 93.7% of matched manual entries without using
+  the title. `auth_first` is binary and ties whenever several candidates share
+  the first author, hence only 48.9% unique top-1 despite AUC 0.976.
+- **Year is weak alone but breaks ties.** A preprint and its journal version
+  often differ by a year, so `year_eq` is rarely decisive (8.9%), yet true
+  pairs have a median `year_diff` of 0 versus 3 for false pairs.
+- **Identifiers are decisive but rare.** `id_hit` uniquely identifies the
+  reference for 36.0% of matched manual entries and is absent otherwise, which
+  explains its moderate AUC. Only 211 of 583 matched manual entries carry an
+  arXiv ID in their BibTeX fields.
+- **Context and missingness features are near chance on their own**
+  (AUC 0.43–0.56). They exist for rare failure modes (a title shifted into the
+  journal field, missing authors or year, very large candidate pools) and are
+  not claimed to be important. Missingness flags are almost always zero in the
+  reviewed sample.
+- **Within-entry ranking features** (`_rank`, `_gap`, `_z`) restate the base
+  scores relative to the other candidates of the same entry, which is what a
+  ranking metric rewards; `blob_partial_z` reaches AUC 0.999.
+
 ### Fit and select models
 
 ```powershell
@@ -791,6 +880,69 @@ and `export_report.json`. Locally, the model output also contains feature
 distribution plots, validation comparisons and the Test error-case file. An
 empty Test error-case file means no matched-entry top-one errors were found;
 it does not certify missing-reference labels.
+
+### Analysis of the results
+
+**The score is at its ceiling.** With the primary definition, a no-match
+entry always scores 0, so all-entry MRR@5 can never exceed the share of
+entries that have a ground truth. The run reaches that bound exactly on Test
+and Validation:
+
+| Partition | Entries | Share with a ground truth (= maximum MRR@5) | Achieved MRR@5 |
+| --- | ---: | ---: | ---: |
+| Test, manual | 159 | 0.6415 | 0.6415 |
+| Test, automatic | 144 | 0.5764 | 0.5764 |
+| Test, combined | 303 | 0.6106 | 0.6106 |
+| Validation, combined | 623 | 0.4960 | 0.4960 |
+| Train, combined | 108,296 | 0.4790 | 0.4784 |
+
+Every point lost on Test comes from the 118 no-match entries; the 185 matched
+entries are all ranked first. Comparing groups by all-entry MRR therefore
+mostly compares how many of their entries have an arXiv counterpart, not
+ranking quality. Matched-only MRR@5 and Hit@1 are the informative numbers for
+ranking.
+
+**Why the learned model only ties the baseline.** `combo_score` alone already
+puts the true reference uniquely first for 100% of the 583 matched manual
+entries and 99.94% of the sampled automatic ones (see the table above). On
+this data a matched entry almost always has one candidate whose title is
+clearly the closest, so there is no room left for a trained model to improve
+the ranking; the Validation tie (0.5558 for the baseline, logistic regression
+and gradient boosting) reflects that. A learned model would matter on noisier
+metadata or if no-match detection were scored.
+
+**Where the no-match entries come from.** 286 of the 869 reviewed entries
+(32.9%) have no correct candidate: r1 58/193, r2 64/169, r3 73/187,
+r4 51/173, r5 40/147. `feature_evidence.py` classifies them:
+
+| Cause | Entries | How it is detected |
+| --- | ---: | --- |
+| `s2_missing`: the cited paper is on arXiv, but Semantic Scholar did not return it as a reference | 29 (10.1%) | An arXiv ID is written in the entry's URL/DOI/journal/title and that ID is not among the paper's candidates |
+| No arXiv evidence: books, journal-only articles, software or web pages, or arXiv papers that S2 missed without an ID in the BibTeX | 257 (89.9%) | No arXiv ID in the BibTeX fields |
+| Label to recheck: the BibTeX's own arXiv ID *is* a candidate | 0 | Consistency check; none found |
+| BibTeX without a title | 0 | All reviewed entries have a title |
+
+Examples of `s2_missing` are `deepseek2025r1` → 2501.12948 and
+`hu2024openrlhf` → 2405.11143 in paper 2604.11554, `zhu2023minigpt4` →
+2304.10592 in 2605.24938, and `silva2022` → 2206.02826 in 2606.00368. These are failures of the M1 reference crawl, not of
+the matcher: the correct answer was never offered as a candidate. They are a
+lower bound, because an S2 omission is only visible when the BibTeX happens to
+contain the arXiv ID.
+
+The best-candidate title similarity separates the two groups well: the
+median best `title_token_set` is 1.00 for matched entries and 0.59 for
+no-match entries, no matched entry is below 0.6, and 152 of 286 no-match
+entries are. The model nevertheless fills `cand_1`–`cand_5` for all 118 Test
+no-match entries, because the prediction table always proposes five
+candidates. A threshold on the top match probability could flag likely
+no-match entries for downstream users, but it would not change MRR@5 as
+defined here.
+
+**Limits of these conclusions.** Each holdout has five publications per
+label source; the manual labels were AI-assisted before human review; the
+feature evidence uses all 25 reviewed publications, including those in Train,
+and a 150-publication automatic sample. The numbers describe this corpus and
+run, not a guarantee for other data.
 
 ### Shared corpus table sizes
 
